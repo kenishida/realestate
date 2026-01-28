@@ -1,8 +1,20 @@
 import { NextResponse } from "next/server";
 import { createServerSupabase, createServiceRoleSupabase } from "@/lib/supabase-server";
 import { generateTextWithGemini } from "@/lib/gemini";
-import { scrapePropertyData, fetchPropertyHTML } from "@/lib/property-scraper";
+import { scrapePropertyData, fetchPropertyHTML, isBlockedOrRedirectPage } from "@/lib/property-scraper";
 import type { Property, PropertyAnalysis } from "@/lib/types";
+import { randomBytes } from "crypto";
+
+/**
+ * ランダムなURLパスを生成する関数
+ * 8文字の英数字（小文字）を生成
+ */
+function generateRandomPath(): string {
+  // ランダムなバイトを生成して、base64urlエンコード（URLセーフ）
+  // 8文字のランダムな文字列を生成
+  const bytes = randomBytes(6); // 6バイト = 8文字（base64エンコード後）
+  return bytes.toString('base64url').substring(0, 8).toLowerCase();
+}
 
 /**
  * 物件URLを受け取り、投資判断を生成するAPIエンドポイント
@@ -12,7 +24,13 @@ export async function POST(request: Request) {
     const body = await request.json();
     const { url, conversationId } = body;
     
-    console.log("[Analyze] Received request:", { url, hasConversationId: !!conversationId });
+    console.log("[Analyze] ========================================");
+    console.log("[Analyze] Received request:", { 
+      url, 
+      hasConversationId: !!conversationId,
+      conversationId: conversationId || "none",
+    });
+    console.log("[Analyze] ========================================");
 
     if (!url || typeof url !== "string") {
       return NextResponse.json(
@@ -39,31 +57,220 @@ export async function POST(request: Request) {
     try {
       supabase = createServiceRoleSupabase();
       usingServiceRole = true;
-      console.log("[Analyze] Using Service Role Supabase client");
+      console.log("[Analyze] ✓ Using Service Role Supabase client (RLS bypassed)");
     } catch (error: any) {
       // Service Role Keyが設定されていない場合は通常のSupabaseクライアントを使用
-      console.warn("[Analyze] Service Role Key not available, using regular Supabase client:", error.message);
+      console.warn("[Analyze] ⚠️  Service Role Key not available, using regular Supabase client:", error.message);
       supabase = await createServerSupabase();
-      console.log("[Analyze] Using regular Supabase client (RLS policies will apply)");
+      console.log("[Analyze] ⚠️  Using regular Supabase client (RLS policies will apply)");
+      console.log("[Analyze] ⚠️  This may cause permission errors if RLS policies are too restrictive");
     }
 
     // 会話IDが指定されていない場合は、新しい会話を作成
     let currentConversationId = conversationId;
     if (!currentConversationId) {
-      const { data: newConversation, error: convError } = await supabase
+      console.log("[Analyze] Creating new conversation with custom_path...");
+      
+      // ランダムなURLパスを生成
+      let customPath = generateRandomPath();
+      let pathAttempts = 0;
+      const maxPathAttempts = 10;
+      
+      // 重複チェック（既存のパスと重複しないように）
+      while (pathAttempts < maxPathAttempts) {
+        const { data: existing } = await supabase
+          .from("conversations")
+          .select("id")
+          .eq("custom_path", customPath)
+          .single();
+        
+        if (!existing) {
+          // 重複していない場合は使用
+          break;
+        }
+        
+        // 重複している場合は新しいパスを生成
+        customPath = generateRandomPath();
+        pathAttempts++;
+      }
+      
+      // 会話作成をリトライ（最大3回）
+      let createAttempts = 0;
+      const maxCreateAttempts = 3;
+      let conversationCreated = false;
+      
+      while (createAttempts < maxCreateAttempts && !conversationCreated) {
+        const { data: newConversation, error: convError } = await supabase
+          .from("conversations")
+          .insert({
+            title: null, // 後で物件名で更新可能
+            user_id: null, // 認証なしの場合
+            custom_path: customPath, // ランダムなURLパスを設定
+          })
+          .select()
+          .single();
+        
+        if (convError) {
+          console.error(`[Analyze] Failed to create conversation (attempt ${createAttempts + 1}/${maxCreateAttempts}):`, {
+            error: convError,
+            message: convError.message,
+            code: convError.code,
+            details: convError.details,
+            hint: convError.hint,
+            custom_path: customPath,
+            usingServiceRole: usingServiceRole,
+          });
+          
+          createAttempts++;
+          
+          // 最後の試行でも失敗した場合は、custom_pathなしで再試行
+          if (createAttempts >= maxCreateAttempts) {
+            console.warn("[Analyze] All attempts failed. Trying without custom_path...");
+            const { data: fallbackConversation, error: fallbackError } = await supabase
+              .from("conversations")
+              .insert({
+                title: null,
+                user_id: null,
+                // custom_pathは後で更新
+              })
+              .select()
+              .single();
+            
+            if (fallbackError) {
+              console.error("[Analyze] Failed to create conversation even without custom_path:", {
+                error: fallbackError,
+                message: fallbackError.message,
+                code: fallbackError.code,
+              });
+              // 会話なしで処理を続行（後でcustom_pathを設定できないが、最低限の処理は続行）
+            } else {
+              currentConversationId = fallbackConversation.id;
+              console.log("[Analyze] Created conversation without custom_path:", currentConversationId);
+              
+              // 後でcustom_pathを設定する試み
+              const updatePath = generateRandomPath();
+              const { error: updateError } = await supabase
+                .from("conversations")
+                .update({ custom_path: updatePath })
+                .eq("id", currentConversationId);
+              
+              if (updateError) {
+                console.error("[Analyze] Failed to set custom_path after creation:", updateError);
+              } else {
+                console.log("[Analyze] Set custom_path after creation:", updatePath);
+              }
+            }
+          }
+        } else {
+          currentConversationId = newConversation.id;
+          conversationCreated = true;
+          console.log("[Analyze] Successfully created new conversation:", {
+            id: currentConversationId,
+            custom_path: customPath,
+            actual_custom_path: newConversation.custom_path,
+            usingServiceRole: usingServiceRole,
+          });
+          
+          // 実際にcustom_pathが保存されたか確認
+          if (newConversation.custom_path !== customPath) {
+            console.warn("[Analyze] WARNING: custom_path mismatch!", {
+              expected: customPath,
+              actual: newConversation.custom_path,
+            });
+          }
+        }
+      }
+    } else {
+      console.log("[Analyze] Using existing conversation:", currentConversationId);
+      
+      // 既存の会話でcustom_pathが設定されていない場合は生成
+      const { data: existingConversation, error: fetchError } = await supabase
         .from("conversations")
-        .insert({
-          title: null, // 後で物件名で更新可能
-          user_id: null, // 認証なしの場合
-        })
-        .select()
+        .select("custom_path, user_id")
+        .eq("id", currentConversationId)
         .single();
       
-      if (convError) {
-        console.warn("[Analyze] Failed to create conversation:", convError);
-      } else {
-        currentConversationId = newConversation.id;
-        console.log("[Analyze] Created new conversation:", currentConversationId);
+      if (fetchError) {
+        console.error("[Analyze] Failed to fetch existing conversation:", {
+          error: fetchError,
+          message: fetchError.message,
+          code: fetchError.code,
+          conversation_id: currentConversationId,
+        });
+      } else if (existingConversation) {
+        console.log("[Analyze] Existing conversation found:", {
+          conversation_id: currentConversationId,
+          has_custom_path: !!existingConversation.custom_path,
+          custom_path: existingConversation.custom_path || "NULL",
+          user_id: existingConversation.user_id || "NULL",
+        });
+        
+        if (!existingConversation.custom_path) {
+          console.log("[Analyze] custom_path is missing, generating new one...");
+          
+          // ランダムなURLパスを生成
+          let customPath = generateRandomPath();
+          let attempts = 0;
+          const maxAttempts = 10;
+          
+          // 重複チェック
+          while (attempts < maxAttempts) {
+            const { data: existing } = await supabase
+              .from("conversations")
+              .select("id")
+              .eq("custom_path", customPath)
+              .single();
+            
+            if (!existing) {
+              break;
+            }
+            
+            customPath = generateRandomPath();
+            attempts++;
+          }
+          
+          // custom_pathを更新（リトライロジック付き）
+          let updateAttempts = 0;
+          const maxUpdateAttempts = 3;
+          let updateSuccess = false;
+          
+          while (updateAttempts < maxUpdateAttempts && !updateSuccess) {
+            const { data: updatedConversation, error: updateError } = await supabase
+              .from("conversations")
+              .update({ custom_path: customPath })
+              .eq("id", currentConversationId)
+              .select()
+              .single();
+            
+            if (updateError) {
+              console.error(`[Analyze] Failed to update conversation custom_path (attempt ${updateAttempts + 1}/${maxUpdateAttempts}):`, {
+                error: updateError,
+                message: updateError.message,
+                code: updateError.code,
+                details: updateError.details,
+                conversation_id: currentConversationId,
+                custom_path: customPath,
+                usingServiceRole: usingServiceRole,
+              });
+              updateAttempts++;
+            } else {
+              updateSuccess = true;
+              console.log("[Analyze] ✓ Successfully updated conversation custom_path:", {
+                conversation_id: currentConversationId,
+                custom_path: customPath,
+                actual_custom_path: updatedConversation?.custom_path,
+              });
+              
+              // 実際にcustom_pathが更新されたか確認
+              if (updatedConversation?.custom_path !== customPath) {
+                console.warn("[Analyze] ⚠️  WARNING: custom_path update mismatch!", {
+                  expected: customPath,
+                  actual: updatedConversation?.custom_path,
+                });
+              }
+            }
+          }
+        }
       }
     }
 
@@ -87,18 +294,13 @@ export async function POST(request: Request) {
     }
 
     let property: Property;
-    let propertyId: string;
+    let propertyId: string | undefined = existingProperty?.id;
 
     // 既存データがあっても、主要な情報が不足している場合は再スクレイピング
     const shouldRescrape = !existingProperty || 
       !existingProperty.title || 
       !existingProperty.address || 
       !existingProperty.floor_plan;
-
-    // 既存データがある場合はIDを取得
-    if (existingProperty) {
-      propertyId = existingProperty.id;
-    }
 
     // 常にHTMLを取得して保存（デバッグと再パースのため）
     console.log("[Analyze] ========================================");
@@ -117,7 +319,7 @@ export async function POST(request: Request) {
       const { data: savedHTML, error: htmlSaveError } = await supabase
         .from("property_html_storage")
         .insert({
-          property_id: propertyId || null,
+          property_id: propertyId ?? null,
           url,
           html: htmlContent,
           status: "success",
@@ -144,7 +346,7 @@ export async function POST(request: Request) {
         const { data: savedHTML } = await supabase
           .from("property_html_storage")
           .insert({
-            property_id: propertyId || null,
+            property_id: propertyId ?? null,
             url,
             html: "",
             status: "error",
@@ -163,7 +365,44 @@ export async function POST(request: Request) {
       }
     }
 
-    if (existingProperty && !shouldRescrape) {
+    const hasKeyData = (p: { title: string | null; address: string | null; floor_plan: string | null } | null) =>
+      !!(p?.title || p?.address || p?.floor_plan);
+    const blocked =
+      !htmlContent || isBlockedOrRedirectPage(htmlContent);
+    let propertyDataUnavailable = false;
+
+    if (blocked && existingProperty) {
+      // 認証中・リダイレクト等で物件HTMLが取れないが、同URLの既存データあり → 使い回す（上書きしない）
+      property = existingProperty as Property;
+      propertyId = property.id;
+      propertyDataUnavailable = !hasKeyData(existingProperty);
+      console.log("[Analyze] Blocked/redirect page detected; reusing existing property (no overwrite):", propertyId, "propertyDataUnavailable:", propertyDataUnavailable);
+    } else if (blocked && !existingProperty) {
+      // 取れない & 既存なし → 最小限の物件レコード作成し、後で「物件データが取得できていません」表示
+      const source = propertyUrl.hostname.includes("athome")
+        ? "athome"
+        : propertyUrl.hostname.includes("suumo")
+        ? "suumo"
+        : propertyUrl.hostname.includes("homes")
+        ? "homes"
+        : "unknown";
+      const { data: minimalProperty, error: minimalErr } = await supabase
+        .from("properties")
+        .insert({ url, source })
+        .select()
+        .single();
+      if (minimalErr || !minimalProperty) {
+        console.error("[Analyze] Failed to create minimal property:", minimalErr);
+        return NextResponse.json(
+          { success: false, error: "Failed to create property record", details: minimalErr?.message },
+          { status: 500 }
+        );
+      }
+      property = minimalProperty as Property;
+      propertyId = property.id;
+      propertyDataUnavailable = true;
+      console.log("[Analyze] Blocked/redirect page detected; created minimal property:", propertyId);
+    } else if (existingProperty && !shouldRescrape) {
       // 既存の物件データを使用（データが十分な場合）
       property = existingProperty as Property;
       propertyId = property.id;
@@ -405,63 +644,373 @@ export async function POST(request: Request) {
 
 ${propertyInfo}
 
-投資判断の観点:
-1. 立地・アクセス性（交通の利便性、周辺環境）
-2. 価格・利回り（適正価格か、投資収益性）
-3. 物件の状態・築年数（メンテナンス状況、耐用年数）
-4. 用途地域・建ぺい率・容積率（将来の開発可能性、リスク）
-5. 市場性・将来性（地域の成長性、需要予測）
-6. リスク要因（災害リスク、法規制リスクなど）
+投資判断は以下のフォーマットで**必ず**返信してください。以下の出力例を参考に、同じ形式で出力してください。
 
-以下の形式で回答してください:
+【出力例 - この形式を必ず守ってください】
 
-【投資判断サマリー】
-[簡潔な判断結果を2-3文で]
+## 1. 物件概要の評価
 
-【推奨度】
-buy / hold / avoid のいずれか
+立地（★1-5で評価）: ★★★★★ 矢場町駅から徒歩7分、栄エリアも徒歩圏内という、名古屋市内でも屈指の希少立地です。中区栄5丁目は商業地域と住宅地域が混在しており、需要が途切れることはありません。
+価格（★1-5で評価）: ★★★☆☆ 7,750万円。土地面積が約39坪（129.19㎡）あり、坪単価は約198万円です。近隣の公示地価や取引事例と比較しても、建物込みでこの単価なら「ほぼ土地代」に近い水準であり、割高感はありません。
+建物（★1-5で評価）: ★★☆☆☆ 1998年築（築26年）。木造（あるいは軽量鉄骨）の法定耐用年数（22年）を超えており、建物自体の評価はほぼゼロに近いです。投資用ローンを組む場合、建物残存期間の関係で融資期間が短くなる（または組みにくい）可能性があります。
 
-【投資スコア】
-0-100の数値
+## 2. 投資シミュレーション（収益性）
 
-【詳細分析】
-・[メリット1]
-・[メリット2]
-・[デメリット1]
-・[デメリット2]
-・[リスク要因]
-・[機会要因]
+想定賃料: 25万円〜32万円程度
+想定利回り: 家賃28万円の場合：年収336万円 ÷ 7,750万円 ＝ 表面利回り 約4.3%
+判断: 投資物件として4%台の利回りは、修繕費や固定資産税（中区は高い）を考慮すると、キャッシュフローがほとんど出ない「低収益物件」です。純粋な不動産投資としては、利回りが低すぎます。
 
-【総合評価】
-[最終的な評価とアドバイス]`;
+## 3. メリット（投資すべき理由）
+
+- 出口戦略（売却）の強さ: 栄エリアの土地は値崩れしにくく、将来的には更地にして売却、あるいは小規模なビルやマンション用地としての需要も見込めます。
+- 資産価値の維持: インフレに強く、現金を現物資産（都心の土地）に変えておく資産防衛策としては非常に優秀です。
+- 希少性: 名古屋のど真ん中にこれだけの土地面積を持つ戸建が出ることは稀です。
+
+## 4. リスク・懸念点（注意すべき理由）
+
+- 融資の難易度: 築古の戸建であるため、銀行の評価が厳しく、自己資金が多く求められる可能性があります。
+- 維持費: 3階建てで面積も広いため、屋上防水や外壁塗装などのメンテナンス費用が、一般的な住宅より高額になります。
+- 空室リスク: ファミリー向けの広すぎる戸建は、賃貸ターゲットが狭いため、一度退去すると次の入居者を見つけるのに苦労する場合があります。
+
+## 5. 最終判断
+
+「利回り重視の投資家」なら: 見送り（パス） この金額を出すなら、より利回りの高い（6〜8%）中古一棟アパートなどを狙うべきです。
+「富裕層の資産防衛・節税」なら: アリ 相続税対策や、将来的な土地価格上昇を見込んだキャピタルゲイン狙いには適しています。
+「住居兼事務所（SOHO）として使いたい」なら: 強く推奨 自分が使いながら、将来的に価値が上がったタイミングで売る「実需型投資」としては非常に魅力的な物件です。
+アドバイス: もし投資として検討されているのであれば、「更地にした場合の査定額」を不動産業者に確認してください。建物の価値を無視しても土地代だけで7,000万円以上の価値が安定してあるのであれば、下値リスクが極めて低いため、手堅い投資と言えます。
+
+## スコア
+
+各セクションのスコア（1-5点）:
+- 立地スコア: 5
+- 価格スコア: 3
+- 建物スコア: 2
+- 収益性スコア: 3
+
+全体の投資スコア: 78
+推奨度: hold
+
+【重要】
+- 上記の例と**完全に同じフォーマット**で出力してください
+- セクション見出しは必ず「## 1. 物件概要の評価」のように「##」で始め、「1.」「2.」などの番号を含めてください
+- 各項目のラベル（「立地（★1-5で評価）」など）は必ずそのまま使用してください
+- スコアは必ず「## スコア」セクションに「- 立地スコア: 5」の形式で記載してください
+- 推奨度は必ず「推奨度: buy」または「推奨度: hold」または「推奨度: avoid」の形式で記載してください
+- ★の数は1-5の範囲で、スコアの数値も必ず1-5の範囲で指定してください`;
+
+    // フォーマット検証関数
+    const validateAnalysisFormat = (text: string): { valid: boolean; missing: string[] } => {
+      const requiredSections = [
+        { pattern: /##\s*1\.\s*物件概要の評価/i, name: "1. 物件概要の評価" },
+        { pattern: /##\s*2\.\s*投資シミュレーション/i, name: "2. 投資シミュレーション" },
+        { pattern: /##\s*3\.\s*メリット/i, name: "3. メリット" },
+        { pattern: /##\s*4\.\s*リスク/i, name: "4. リスク" },
+        { pattern: /##\s*5\.\s*最終判断/i, name: "5. 最終判断" },
+        { pattern: /##\s*スコア/i, name: "スコア" },
+      ];
+
+      const requiredFields = [
+        { pattern: /立地[（(]★[1-5]で評価[）)]:/i, name: "立地評価" },
+        { pattern: /価格[（(]★[1-5]で評価[）)]:/i, name: "価格評価" },
+        { pattern: /建物[（(]★[1-5]で評価[）)]:/i, name: "建物評価" },
+        { pattern: /想定賃料:/i, name: "想定賃料" },
+        { pattern: /想定利回り:/i, name: "想定利回り" },
+        { pattern: /立地スコア:\s*\d+/i, name: "立地スコア" },
+        { pattern: /全体の投資スコア:\s*\d+/i, name: "全体の投資スコア" },
+        { pattern: /推奨度:\s*(buy|hold|avoid)/i, name: "推奨度" },
+      ];
+
+      const missingSections = requiredSections
+        .filter((section) => !section.pattern.test(text))
+        .map((section) => section.name);
+
+      const missingFields = requiredFields
+        .filter((field) => !field.pattern.test(text))
+        .map((field) => field.name);
+
+      return {
+        valid: missingSections.length === 0 && missingFields.length === 0,
+        missing: [...missingSections, ...missingFields],
+      };
+    };
 
     console.log("[Analyze] Generating investment analysis...");
-    let analysisText: string;
-    try {
-      analysisText = await generateTextWithGemini(analysisPrompt);
-      console.log("[Analyze] Analysis generated successfully, length:", analysisText.length);
-    } catch (geminiError: any) {
-      console.error("[Analyze] Gemini API error:", geminiError);
+    let analysisText: string | null = null;
+    let retries = 0;
+    const maxRetries = 3;
+    let currentPrompt = analysisPrompt;
+    let lastError: Error | null = null;
+
+    // リトライロジック付きで生成
+    do {
+      try {
+        console.log(`[Analyze] Attempting to generate analysis (attempt ${retries + 1}/${maxRetries})...`);
+        analysisText = await generateTextWithGemini(currentPrompt);
+        
+        if (!analysisText || analysisText.trim().length === 0) {
+          throw new Error("Generated analysis text is empty");
+        }
+        
+        console.log("[Analyze] Analysis generated successfully, length:", analysisText.length);
+
+        // フォーマット検証
+        const validation = validateAnalysisFormat(analysisText);
+        if (validation.valid) {
+          console.log("[Analyze] Format validation passed");
+          break;
+        } else {
+          console.warn(
+            `[Analyze] Format validation failed. Missing: ${validation.missing.join(", ")}`
+          );
+          
+          // 最後のリトライの場合は、検証に失敗しても処理を続行
+          if (retries >= maxRetries - 1) {
+            console.warn("[Analyze] Max retries reached. Proceeding with analysis despite validation failures.");
+            break;
+          }
+          
+          // リトライ時はより厳密な指示を追加
+          console.log(`[Analyze] Retrying... (${retries + 1}/${maxRetries})`);
+          currentPrompt = `${analysisPrompt}
+
+【重要】前回の出力がフォーマット要件を満たしていませんでした。以下の点を確認してください：
+- すべてのセクション（1-5とスコア）が含まれているか
+- 各セクションの見出しが「## 数字. タイトル」の形式になっているか
+- 必須項目（立地評価、価格評価、建物評価、想定賃料、想定利回り、スコア、推奨度）がすべて含まれているか
+- 上記の出力例と完全に同じフォーマットになっているか
+
+再度、上記の出力例を参考に、正確なフォーマットで出力してください。`;
+        }
+        retries++;
+      } catch (geminiError: any) {
+        console.error("[Analyze] Gemini API error:", geminiError);
+        lastError = geminiError;
+        
+        // APIキーの問題を検出
+        const errorMessage = geminiError.message || "";
+        if (errorMessage.includes("403") || errorMessage.includes("Forbidden") || errorMessage.includes("leaked") || errorMessage.includes("API key")) {
+          return NextResponse.json(
+            {
+              success: false,
+              error: "Gemini APIキーのエラー",
+              details: "APIキーが無効または漏洩として報告されています。新しいAPIキーを取得して、.env.localファイルのGEMINI_API_KEYを更新してください。",
+              help: "https://aistudio.google.com/apikey で新しいAPIキーを取得できます。",
+            },
+            { status: 403 }
+          );
+        }
+        
+        if (retries >= maxRetries - 1) {
+          return NextResponse.json(
+            {
+              success: false,
+              error: "Failed to generate analysis with Gemini API",
+              details: geminiError.message || "Unknown error",
+              stack: geminiError.stack,
+            },
+            { status: 500 }
+          );
+        }
+        retries++;
+      }
+    } while (retries < maxRetries);
+
+    // analysisTextが未定義の場合はエラー
+    if (!analysisText || analysisText.trim().length === 0) {
+      console.error("[Analyze] Analysis text is null or empty after all retries");
+      console.error("[Analyze] Last error:", lastError);
       return NextResponse.json(
         {
           success: false,
           error: "Failed to generate analysis with Gemini API",
-          details: geminiError.message || "Unknown error",
+          details: lastError?.message || "Analysis text is null or empty after retries. Please check server logs for details.",
         },
         { status: 500 }
       );
     }
 
-    // 分析結果をパース
-    const recommendationMatch = analysisText.match(/【推奨度】\s*(\w+)/);
-    const scoreMatch = analysisText.match(/【投資スコア】\s*(\d+)/);
-    const summaryMatch = analysisText.match(/【投資判断サマリー】\s*([^\n]+(?:\n[^\n]+)*?)(?=【|$)/);
+    // 最終検証
+    const finalValidation = validateAnalysisFormat(analysisText);
+    if (!finalValidation.valid) {
+      console.warn(
+        `[Analyze] Final validation failed after ${maxRetries} retries. Missing: ${finalValidation.missing.join(
+          ", "
+        )}`
+      );
+      // 検証に失敗しても処理は続行（パーサーが柔軟に対応）
+    }
+
+    // 新しいフォーマットで分析結果をパース
+    const parseAnalysis = (text: string) => {
+      // スコア抽出（複数のパターンに対応）
+      const locationScoreMatch = text.match(/立地スコア:\s*(\d+)/i) ||
+                                 text.match(/立地[：:]\s*(\d+)/i);
+      const priceScoreMatch = text.match(/価格スコア:\s*(\d+)/i) ||
+                             text.match(/価格[：:]\s*(\d+)/i);
+      const buildingScoreMatch = text.match(/建物スコア:\s*(\d+)/i) ||
+                                text.match(/建物[：:]\s*(\d+)/i);
+      const yieldScoreMatch = text.match(/収益性スコア:\s*(\d+)/i) ||
+                             text.match(/収益性[：:]\s*(\d+)/i);
+      const overallScoreMatch = text.match(/全体の投資スコア:\s*(\d+)/i) ||
+                               text.match(/投資スコア:\s*(\d+)/i) ||
+                               text.match(/スコア:\s*(\d+)/i);
+      const recommendationMatch = text.match(/推奨度:\s*(buy|hold|avoid)/i) ||
+                                 text.match(/推奨[：:]\s*(buy|hold|avoid)/i);
+
+      // 物件概要の評価（複数のパターンに対応）
+      const locationMatch = text.match(/立地[（(]★[1-5]で評価[）)]:\s*([^\n]+)/) ||
+                           text.match(/立地:\s*([^\n]+)/) ||
+                           text.match(/立地評価:\s*([^\n]+)/);
+      const priceMatch = text.match(/価格[（(]★[1-5]で評価[）)]:\s*([^\n]+)/) ||
+                        text.match(/価格:\s*([^\n]+)/) ||
+                        text.match(/価格評価:\s*([^\n]+)/);
+      const buildingMatch = text.match(/建物[（(]★[1-5]で評価[）)]:\s*([^\n]+)/) ||
+                           text.match(/建物:\s*([^\n]+)/) ||
+                           text.match(/建物評価:\s*([^\n]+)/);
+
+      // ★の数を抽出
+      const getStarCount = (text: string): number => {
+        const starMatch = text.match(/★{1,5}/);
+        return starMatch ? starMatch[0].length : 0;
+      };
+
+      // 投資シミュレーション（複数のパターンに対応）
+      const rentMatch = text.match(/想定賃料[：:]\s*([^\n]+)/) ||
+                       text.match(/賃料[：:]\s*([^\n]+)/);
+      const yieldMatch = text.match(/想定利回り[：:]\s*([^\n]+)/) ||
+                        text.match(/利回り[：:]\s*([^\n]+)/);
+      const judgmentMatch = text.match(/判断[：:]\s*([^\n]+(?:\n[^\n]+)*?)(?=##|$)/) ||
+                           text.match(/収益性の評価[：:]\s*([^\n]+(?:\n[^\n]+)*?)(?=##|$)/);
+
+      // メリット（複数のパターンに対応）
+      const merits: Array<{ title: string; description: string }> = [];
+      const meritSection = text.match(/##\s*3[\.．]\s*メリット[\s\S]*?(?=##\s*4[\.．]|$)/i) ||
+                          text.match(/##\s*メリット[\s\S]*?(?=##\s*リスク|$)/i);
+      if (meritSection) {
+        // パターン1: "- タイトル: 説明"
+        let meritLines = meritSection[0].match(/- ([^:：]+)[：:]\s*([^\n]+(?:\n(?!-)[^\n]+)*)/g);
+        // パターン2: "・タイトル: 説明"
+        if (!meritLines || meritLines.length === 0) {
+          meritLines = meritSection[0].match(/[・•]\s*([^:：]+)[：:]\s*([^\n]+(?:\n(?![・•])[^\n]+)*)/g);
+        }
+        if (meritLines) {
+          meritLines.forEach((line) => {
+            const match = line.match(/[-・•]\s*([^:：]+)[：:]\s*(.+)/s);
+            if (match) {
+              merits.push({ 
+                title: match[1].trim(), 
+                description: match[2].trim().replace(/\n+/g, " ").trim()
+              });
+            }
+          });
+        }
+      }
+
+      // リスク（複数のパターンに対応）
+      const risks: Array<{ title: string; description: string }> = [];
+      const riskSection = text.match(/##\s*4[\.．]\s*リスク[\s\S]*?(?=##\s*5[\.．]|$)/i) ||
+                         text.match(/##\s*リスク[\s\S]*?(?=##\s*最終判断|$)/i);
+      if (riskSection) {
+        // パターン1: "- タイトル: 説明"
+        let riskLines = riskSection[0].match(/- ([^:：]+)[：:]\s*([^\n]+(?:\n(?!-)[^\n]+)*)/g);
+        // パターン2: "・タイトル: 説明"
+        if (!riskLines || riskLines.length === 0) {
+          riskLines = riskSection[0].match(/[・•]\s*([^:：]+)[：:]\s*([^\n]+(?:\n(?![・•])[^\n]+)*)/g);
+        }
+        if (riskLines) {
+          riskLines.forEach((line) => {
+            const match = line.match(/[-・•]\s*([^:：]+)[：:]\s*(.+)/s);
+            if (match) {
+              risks.push({ 
+                title: match[1].trim(), 
+                description: match[2].trim().replace(/\n+/g, " ").trim()
+              });
+            }
+          });
+        }
+      }
+
+      // 最終判断（複数のパターンに対応）
+      const yieldFocusedMatch = text.match(/「利回り重視の投資家」なら[：:]\s*([^\n]+(?:\n(?!「)[^\n]+)*)/) ||
+                                text.match(/利回り重視[：:]\s*([^\n]+)/);
+      const assetProtectionMatch = text.match(/「富裕層の資産防衛・節税」なら[：:]\s*([^\n]+(?:\n(?!「)[^\n]+)*)/) ||
+                                  text.match(/資産防衛[：:]\s*([^\n]+)/);
+      const sohoMatch = text.match(/「住居兼事務所（SOHO）として使いたい」なら[：:]\s*([^\n]+(?:\n(?!「)[^\n]+)*)/) ||
+                       text.match(/SOHO[：:]\s*([^\n]+)/);
+      const adviceMatch = text.match(/アドバイス[：:]\s*([^\n]+(?:\n[^\n]+)*?)(?=##|$)/) ||
+                         text.match(/推奨事項[：:]\s*([^\n]+(?:\n[^\n]+)*?)(?=##|$)/);
+
+      return {
+        property_overview: {
+          location: {
+            score: locationScoreMatch ? parseInt(locationScoreMatch[1], 10) : getStarCount(locationMatch?.[1] || ""),
+            max_score: 5,
+            stars: "★".repeat(locationScoreMatch ? parseInt(locationScoreMatch[1], 10) : getStarCount(locationMatch?.[1] || "")),
+            comment: locationMatch?.[1]?.replace(/★+/g, "").trim() || "",
+          },
+          price: {
+            score: priceScoreMatch ? parseInt(priceScoreMatch[1], 10) : getStarCount(priceMatch?.[1] || ""),
+            max_score: 5,
+            stars: "★".repeat(priceScoreMatch ? parseInt(priceScoreMatch[1], 10) : getStarCount(priceMatch?.[1] || "")),
+            comment: priceMatch?.[1]?.replace(/★+/g, "").trim() || "",
+          },
+          building: {
+            score: buildingScoreMatch ? parseInt(buildingScoreMatch[1], 10) : getStarCount(buildingMatch?.[1] || ""),
+            max_score: 5,
+            stars: "★".repeat(buildingScoreMatch ? parseInt(buildingScoreMatch[1], 10) : getStarCount(buildingMatch?.[1] || "")),
+            comment: buildingMatch?.[1]?.replace(/★+/g, "").trim() || "",
+          },
+        },
+        investment_simulation: {
+          estimated_rent: rentMatch?.[1]?.trim() || "",
+          estimated_yield: yieldMatch?.[1]?.trim() || "",
+          calculation: yieldMatch?.[1]?.trim() || "",
+          judgment: judgmentMatch?.[1]?.trim() || "",
+        },
+        merits: merits,
+        risks: risks,
+        final_judgment: {
+          yield_focused: {
+            recommendation: yieldFocusedMatch?.[1]?.trim() || "",
+            reason: "",
+          },
+          asset_protection: {
+            recommendation: assetProtectionMatch?.[1]?.trim() || "",
+            reason: "",
+          },
+          soho_use: {
+            recommendation: sohoMatch?.[1]?.trim() || "",
+            reason: "",
+          },
+        },
+        advice: adviceMatch?.[1]?.trim() || "",
+      };
+    };
+
+    const structuredAnalysis = parseAnalysis(analysisText);
+
+    // 全体スコアと推奨度を抽出
+    const overallScoreMatch = analysisText.match(/全体の投資スコア:\s*(\d+)/);
+    const recommendationMatch = analysisText.match(/推奨度:\s*(buy|hold|avoid)/i);
+    const yieldScoreMatch = analysisText.match(/収益性スコア:\s*(\d+)/);
 
     const recommendation = recommendationMatch
       ? (recommendationMatch[1].toLowerCase() as "buy" | "hold" | "avoid")
       : null;
-    const score = scoreMatch ? parseInt(scoreMatch[1], 10) : null;
-    const summary = summaryMatch ? summaryMatch[1].trim() : analysisText.substring(0, 500);
+    const score = overallScoreMatch ? parseInt(overallScoreMatch[1], 10) : null;
+    const yieldScore = yieldScoreMatch ? parseInt(yieldScoreMatch[1], 10) : null;
+
+    // セクションスコアを抽出
+    const sectionScores = {
+      location: structuredAnalysis.property_overview.location.score,
+      price: structuredAnalysis.property_overview.price.score,
+      building: structuredAnalysis.property_overview.building.score,
+      yield: yieldScore || 0,
+      overall: score || 0,
+    };
+
+    // サマリー（最初の段落を取得）
+    const summary = structuredAnalysis.advice || analysisText.substring(0, 500);
 
     // 分析結果を構造化
     const analysisResult = {
@@ -469,6 +1018,7 @@ buy / hold / avoid のいずれか
       recommendation: recommendation || undefined,
       score: score || undefined,
       full_analysis: analysisText,
+      structured: structuredAnalysis,
     };
 
     // 投資判断結果をデータベースに保存
@@ -520,6 +1070,8 @@ buy / hold / avoid のいずれか
         summary,
         recommendation,
         score,
+        section_scores: sectionScores,
+        structured_analysis: structuredAnalysis,
       })
       .select()
       .single();
@@ -578,9 +1130,26 @@ buy / hold / avoid のいずれか
       console.warn("[Analyze] Analysis not saved, skipping assistant message");
     }
 
+    // 会話のcustom_pathを取得
+    let conversationCustomPath: string | null = null;
+    if (currentConversationId) {
+      const { data: convData } = await supabase
+        .from("conversations")
+        .select("custom_path")
+        .eq("id", currentConversationId)
+        .single();
+      
+      if (convData) {
+        conversationCustomPath = convData.custom_path;
+        console.log("[Analyze] Conversation custom_path:", conversationCustomPath);
+      }
+    }
+
     return NextResponse.json({
       success: true,
       conversationId: currentConversationId || null,
+      conversationCustomPath: conversationCustomPath,
+      propertyDataUnavailable: propertyDataUnavailable,
       property: {
         id: property.id,
         url: property.url,

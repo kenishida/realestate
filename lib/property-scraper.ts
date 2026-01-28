@@ -53,6 +53,25 @@ export async function scrapePropertyData(url: string, html?: string): Promise<Sc
 }
 
 /**
+ * 認証中・リダイレクト・ボット対策ページかどうかを判定する。
+ * アットホームの「【アットホーム】認証中」等、物件詳細ではないページを検知する。
+ */
+export function isBlockedOrRedirectPage(html: string): boolean {
+  if (!html || typeof html !== "string") return true;
+  const lower = html.toLowerCase();
+  const patterns = [
+    "認証中",
+    "【アットホーム】認証中",
+    "onprotectioninitialized",
+    "reeseskip",
+    "cookieisset",
+    "認証してください",
+    "アクセスを確認しています",
+  ];
+  return patterns.some((p) => lower.includes(p.toLowerCase()));
+}
+
+/**
  * HTMLを取得する（共通処理）
  */
 export async function fetchPropertyHTML(url: string): Promise<{ html: string; status: number; headers: Record<string, string> }> {
@@ -106,7 +125,7 @@ async function scrapeAthomes(url: string, html?: string): Promise<ScrapedPropert
     // デバッグ用：HTMLの構造を確認
     console.log("[Scraper] HTML loaded, body text length:", $("body").text().length);
 
-    console.log("[Scraper] HTML length:", html.length);
+    console.log("[Scraper] HTML length:", htmlContent.length);
     console.log("[Scraper] Page title:", $("title").text());
 
     const data: ScrapedPropertyData = {
