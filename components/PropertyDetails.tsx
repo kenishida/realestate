@@ -31,6 +31,8 @@ interface PropertyDetailsProps {
   showPropertyDetails?: boolean;
   showTransportation?: boolean;
   showLandInfo?: boolean;
+  /** 認証中・リダイレクト等で物件データが取れなかった場合 true */
+  propertyDataUnavailable?: boolean;
 }
 
 export default function PropertyDetails({ 
@@ -39,7 +41,34 @@ export default function PropertyDetails({
   showPropertyDetails = true,
   showTransportation = true,
   showLandInfo = true,
+  propertyDataUnavailable = false,
 }: PropertyDetailsProps) {
+  if (propertyDataUnavailable) {
+    return (
+      <div className="overflow-hidden rounded-xl border border-amber-200 bg-amber-50 shadow-sm">
+        <div className="border-b border-amber-200 px-6 py-4">
+          <h3 className="text-lg font-semibold text-amber-900">物件情報</h3>
+        </div>
+        <div className="px-6 py-6 space-y-3">
+          <p className="text-amber-800 font-medium">物件データが取得できていません</p>
+          <p className="text-sm text-amber-700">
+            サイトの認証ページやリダイレクトにより、物件の詳細データを取得できませんでした。同じURLは他の方の結果を使い回します。
+          </p>
+          {property.url && (
+            <a
+              href={property.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-block text-sm text-blue-600 hover:text-blue-700 hover:underline break-all"
+            >
+              {property.url}
+            </a>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   const formatNumber = (num: number | null) => {
     if (num === null) return "-";
     return num.toLocaleString();

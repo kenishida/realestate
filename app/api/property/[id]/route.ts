@@ -7,10 +7,10 @@ import type { Property, PropertyAnalysis, Message, Conversation } from "@/lib/ty
  */
 export async function GET(
   request: Request,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const propertyId = params.id;
+    const { id: propertyId } = await params;
 
     let supabase;
     try {
@@ -104,6 +104,10 @@ export async function GET(
 
     const messages: Message[] = uniqueMessages as Message[];
 
+    const hasKeyData = (p: Property | null) =>
+      !!(p?.title || p?.address || p?.floor_plan);
+    const propertyDataUnavailable = !!property && !hasKeyData(property as Property);
+
     // メッセージから会話IDを取得
     const conversationIds = [...new Set(messages.map((m: Message) => m.conversation_id).filter(Boolean))];
     
@@ -127,6 +131,7 @@ export async function GET(
       success: true,
       property: property as Property,
       analysis: analyses && analyses.length > 0 ? (analyses[0] as PropertyAnalysis) : null,
+      propertyDataUnavailable,
       conversations: conversations || [],
       messages: messages,
     });

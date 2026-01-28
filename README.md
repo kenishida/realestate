@@ -36,7 +36,18 @@ SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_role_key
 ### 3. データベースのセットアップ
 
 1. Supabaseプロジェクトを作成
-2. Supabase SQLエディタで `migrations/create_chat_schema.sql` を実行
+2. Supabase SQLエディタで以下のマイグレーションを順番に実行：
+   - `migrations/create_chat_schema.sql` - 基本スキーマの作成
+   - `migrations/setup_investment_purpose.sql` - 投資目的機能のセットアップ（**重要**）
+
+**投資目的機能のセットアップ手順：**
+1. Supabaseダッシュボードを開く
+2. 左側のメニューから「SQL Editor」を選択
+3. 「New query」をクリック
+4. `migrations/setup_investment_purpose.sql` の内容をコピー＆ペースト
+5. 「Run」ボタンをクリックして実行
+
+このマイグレーションを実行しないと、「investment_purposeカラムが存在しません」というエラーが発生します。
 
 ### 4. 開発サーバーの起動
 

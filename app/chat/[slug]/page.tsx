@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
+import { useRouter, useParams } from "next/navigation";
 import ChatInput from "@/components/ChatInput";
 import ChatMessage from "@/components/ChatMessage";
 import PropertyDetails from "@/components/PropertyDetails";
@@ -16,25 +16,83 @@ interface Message {
   timestamp: Date;
 }
 
-export default function Home() {
+export default function ChatPage() {
+  const params = useParams();
   const router = useRouter();
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: "1",
-      role: "assistant",
-      content: "こんにちは！物件価値わかるくんです。\n物件URLを入力していただければ、投資判断を行います。",
-      timestamp: new Date(),
-    },
-  ]);
-  const [isLoading, setIsLoading] = useState(false);
+  const slug = params?.slug as string;
+
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [propertyData, setPropertyData] = useState<any>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<"property" | "environment" | "analysis">("property");
   const [waitingForPurpose, setWaitingForPurpose] = useState(false);
   const [currentAnalysisId, setCurrentAnalysisId] = useState<string | null>(null);
 
+  useEffect(() => {
+    if (slug) {
+      loadConversationBySlug(slug);
+    }
+  }, [slug]);
+
+  const loadConversationBySlug = async (customPath: string) => {
+    setIsLoading(true);
+    try {
+      // カスタムパスでチャット履歴を検索
+      const response = await fetch(`/api/conversation/by-path/${encodeURIComponent(customPath)}`);
+      
+      if (!response.ok) {
+        throw new Error("Failed to fetch conversation");
+      }
+
+      const data = await response.json();
+
+      if (data.success) {
+        setPropertyData({
+          property: data.property,
+          analysis: data.analysis,
+          propertyDataUnavailable: data.propertyDataUnavailable ?? false,
+        });
+        setActiveTab("property");
+
+        // メッセージ履歴を表示
+        if (data.messages && data.messages.length > 0) {
+          const messageHistory: Message[] = data.messages.map((msg: any) => ({
+            id: msg.id,
+            role: msg.role as "user" | "assistant" | "system",
+            content: msg.content,
+            timestamp: new Date(msg.created_at),
+          }));
+          setMessages(messageHistory);
+        } else {
+          setMessages([
+            {
+              id: "1",
+              role: "assistant",
+              content: `物件「${data.property?.title || data.property?.address || "物件"}」の情報を表示しています。\n\n右側に物件詳細と投資判断を表示しています。`,
+              timestamp: new Date(),
+            },
+          ]);
+        }
+      } else {
+        throw new Error(data.error || "Unknown error");
+      }
+    } catch (error: any) {
+      console.error("Error loading conversation:", error);
+      setMessages([
+        {
+          id: "1",
+          role: "assistant",
+          content: `エラーが発生しました: ${error.message || "不明なエラー"}\n\nカスタムパス "${customPath}" に対応するチャット履歴が見つかりませんでした。`,
+          timestamp: new Date(),
+        },
+      ]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const handleSendMessage = async (content: string) => {
-    // ユーザーメッセージを追加
     const userMessage: Message = {
       id: Date.now().toString(),
       role: "user",
@@ -58,31 +116,21 @@ export default function Home() {
 
       if (isUrl) {
         // 物件URLの場合、投資判断を生成
-        // localStorageから既存のconversationIdを取得
-        const existingConversationId = localStorage.getItem("currentConversationId");
-        
         const response = await fetch("/api/analyze", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({ 
-            url: content,
-            conversationId: existingConversationId || undefined,
-          }),
+          body: JSON.stringify({ url: content }),
         });
 
         const data = await response.json();
 
         if (!response.ok) {
-          const errorMessage = data.error || "Failed to analyze property";
-          const errorDetails = data.details ? `\n詳細: ${data.details}` : "";
-          const helpLink = data.help ? `\n\n解決方法: ${data.help}` : "";
-          throw new Error(`${errorMessage}${errorDetails}${helpLink}`);
+          throw new Error(data.error || "Failed to analyze property");
         }
 
         if (data.success) {
-          // 投資判断結果を表示
           const analysisMessage: Message = {
             id: (Date.now() + 1).toString(),
             role: "assistant",
@@ -91,19 +139,19 @@ export default function Home() {
           };
 
           setMessages((prev) => [...prev, analysisMessage]);
-          setPropertyData({ ...data, propertyDataUnavailable: data.propertyDataUnavailable ?? false });
+          setPropertyData({
+            ...data,
+            propertyDataUnavailable: data.propertyDataUnavailable ?? false,
+          });
           
-          // 分析IDを保存
           if (data.analysisId) {
             setCurrentAnalysisId(data.analysisId);
           }
           
-          // 会話IDを保存（次回のリクエストで使用）
           if (data.conversationId) {
             localStorage.setItem("currentConversationId", data.conversationId);
           }
 
-          // 投資目的の質問を自動追加
           const purposeQuestion: Message = {
             id: (Date.now() + 2).toString(),
             role: "assistant",
@@ -131,8 +179,7 @@ export default function Home() {
             return "住居兼事務所（SOHO）";
           }
           if (normalized === "4" || normalized.includes("その他")) {
-            // "その他"の場合は、ユーザーに具体的な目的を聞く必要があるが、
-            // 今回は自由なテキストとして受け入れるため、入力テキストをそのまま使用
+            // "その他"の場合は、ユーザーの入力テキストをそのまま使用
             return text.trim();
           }
           
@@ -142,7 +189,6 @@ export default function Home() {
 
         const purposeText = parseInvestmentPurpose(content);
 
-        // 投資目的に応じた追加分析を取得
         try {
           const response = await fetch("/api/analyze-purpose", {
             method: "POST",
@@ -166,7 +212,6 @@ export default function Home() {
           }
 
           if (data.success) {
-            // 更新された分析結果を表示
             const purposeAnalysisMessage: Message = {
               id: (Date.now() + 1).toString(),
               role: "assistant",
@@ -176,7 +221,6 @@ export default function Home() {
 
             setMessages((prev) => [...prev, purposeAnalysisMessage]);
             
-            // プロパティデータを更新
             setPropertyData((prev: any) => ({
               ...prev,
               analysis: {
@@ -184,16 +228,12 @@ export default function Home() {
                 ...data.updatedAnalysis,
                 investment_purpose: purposeText,
               },
-              propertyDataUnavailable: prev.propertyDataUnavailable ?? false,
             }));
 
             setWaitingForPurpose(false);
             setCurrentAnalysisId(null);
           } else {
-            // エラーの詳細を取得
-            const errorMessage = data.error || "Unknown error";
-            const errorDetails = data.details || "";
-            throw new Error(`${errorMessage}${errorDetails ? `\n${errorDetails}` : ""}`);
+            throw new Error(data.error || "Unknown error");
           }
         } catch (error: any) {
           console.error("Error analyzing purpose:", error);
@@ -257,14 +297,13 @@ export default function Home() {
           const errorMessage: Message = {
             id: (Date.now() + 1).toString(),
             role: "assistant",
-            content: errorContent,
+            content: errorContent || `エラーが発生しました: ${errorDetails}`,
             timestamp: new Date(),
           };
           setMessages((prev) => [...prev, errorMessage]);
           setWaitingForPurpose(false);
         }
       } else {
-        // 通常のメッセージの場合
         const assistantMessage: Message = {
           id: (Date.now() + 1).toString(),
           role: "assistant",
@@ -276,37 +315,17 @@ export default function Home() {
       }
     } catch (error: any) {
       console.error("Error sending message:", error);
-      console.error("Error details:", {
-        message: error.message,
-        stack: error.stack,
-        name: error.name,
-      });
-      // エラーメッセージを整形
-      let errorContent = `エラーが発生しました: ${error.message || "不明なエラー"}\n\n`;
-      
-      // APIキーの問題の場合、特別なメッセージを表示
-      if (error.message?.includes("APIキー") || error.message?.includes("leaked") || error.message?.includes("403")) {
-        errorContent += `【重要】Gemini APIキーの問題が検出されました。\n\n`;
-        errorContent += `解決方法:\n`;
-        errorContent += `1. https://aistudio.google.com/apikey にアクセス\n`;
-        errorContent += `2. 新しいAPIキーを生成\n`;
-        errorContent += `3. .env.localファイルのGEMINI_API_KEYを更新\n`;
-        errorContent += `4. 開発サーバーを再起動\n`;
-      } else {
-        errorContent += `詳細を確認して、もう一度お試しください。\n\n考えられる原因:\n- 物件URLの形式が正しくない\n- サーバーエラー\n- Gemini APIのエラー\n\nサーバーログを確認してください。`;
-      }
-      
       const errorMessage: Message = {
         id: (Date.now() + 1).toString(),
         role: "assistant",
-        content: errorContent,
+        content: `エラーが発生しました: ${error.message || "不明なエラー"}`,
         timestamp: new Date(),
       };
       setMessages((prev) => [...prev, errorMessage]);
       hasError = true;
     } finally {
       setIsLoading(false);
-      // エラー時のみ投資目的待ちをリセット（URL入力の場合のみ）
+      // エラー時のみ投資目的待ちをリセット
       if (hasError && waitingForPurpose) {
         setWaitingForPurpose(false);
         setCurrentAnalysisId(null);
@@ -318,11 +337,10 @@ export default function Home() {
     console.log("Selected property:", property);
     setIsSidebarOpen(false);
     
-    // 既存の動作（物件詳細を表示）
+    // 物件を選択した場合は、その物件に関連するチャット履歴を取得して表示
+    // ここでは既存の動作を維持
     setIsLoading(true);
-
     try {
-      // 物件情報、会話履歴、投資判断を取得
       const response = await fetch(`/api/property/${property.id}`);
       
       if (!response.ok) {
@@ -332,24 +350,13 @@ export default function Home() {
       const data = await response.json();
 
       if (data.success) {
-        console.log("[Property Select] Received data:", {
-          property: data.property?.title,
-          messagesCount: data.messages?.length || 0,
-          analysis: !!data.analysis,
-        });
-        console.log("[Property Select] Messages:", data.messages);
-
-        // 物件情報を右側に表示
         setPropertyData({
           property: data.property,
           analysis: data.analysis,
           propertyDataUnavailable: data.propertyDataUnavailable ?? false,
         });
-        
-        // タブを「物件情報」にリセット
         setActiveTab("property");
 
-        // メッセージ履歴を表示
         if (data.messages && data.messages.length > 0) {
           const messageHistory: Message[] = data.messages.map((msg: any) => ({
             id: msg.id,
@@ -359,7 +366,6 @@ export default function Home() {
           }));
           setMessages(messageHistory);
         } else {
-          // メッセージがない場合は初期メッセージを表示
           setMessages([
             {
               id: "1",
@@ -543,7 +549,7 @@ export default function Home() {
           ) : (
             <div className="rounded-lg border border-gray-200 bg-white p-6">
               <p className="text-center text-gray-500">
-                物件URLを入力すると、ここに物件情報と投資判断が表示されます
+                {isLoading ? "読み込み中..." : "チャット履歴を読み込んでいます..."}
               </p>
             </div>
           )}

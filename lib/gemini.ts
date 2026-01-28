@@ -40,7 +40,23 @@ async function generateText(prompt: string, genAIClient?: GoogleGenerativeAI): P
     return text;
   } catch (error: any) {
     console.error("[Gemini] API error:", error);
-    throw new Error(`Gemini API error: ${error.message || "Unknown error"}`);
+    console.error("[Gemini] Error details:", {
+      message: error.message,
+      status: error.status,
+      statusText: error.statusText,
+      response: error.response,
+      stack: error.stack,
+    });
+    
+    // より詳細なエラーメッセージを提供
+    let errorMessage = "Gemini API error";
+    if (error.message) {
+      errorMessage = error.message;
+    } else if (error.status) {
+      errorMessage = `Gemini API error: ${error.status} ${error.statusText || ""}`;
+    }
+    
+    throw new Error(`${errorMessage}`);
   }
 }
 
