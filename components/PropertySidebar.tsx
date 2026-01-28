@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { createClientSupabase } from "@/lib/supabase";
-import { Property } from "@/lib/types";
+import { Property, Conversation } from "@/lib/types";
 
 interface PropertySidebarProps {
   isOpen: boolean;
@@ -15,9 +16,12 @@ export default function PropertySidebar({
   onClose,
   onSelectProperty,
 }: PropertySidebarProps) {
+  const router = useRouter();
   const [properties, setProperties] = useState<Property[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [expandedPropertyId, setExpandedPropertyId] = useState<string | null>(null);
+  const [propertyConversations, setPropertyConversations] = useState<Record<string, Conversation[]>>({});
 
   useEffect(() => {
     if (isOpen) {
@@ -69,9 +73,62 @@ export default function PropertySidebar({
     }
   };
 
-  const handlePropertyClick = (property: Property) => {
-    if (onSelectProperty) {
-      onSelectProperty(property);
+  const handlePropertyClick = async (property: Property) => {
+    // 展開/折りたたみを切り替え
+    if (expandedPropertyId === property.id) {
+      setExpandedPropertyId(null);
+      return;
+    }
+
+    setExpandedPropertyId(property.id);
+
+    // この物件に関連するチャット履歴を取得
+    if (!propertyConversations[property.id]) {
+      try {
+        console.log("[PropertySidebar] Fetching conversations for property:", property.id);
+        
+        // APIエンドポイントを使用してチャット履歴を取得（RLSポリシーをバイパス）
+        const response = await fetch(`/api/property/${property.id}/conversations`);
+        
+        if (!response.ok) {
+          const errorData = await response.json();
+          console.error("[PropertySidebar] Error fetching conversations:", errorData);
+          setPropertyConversations((prev) => ({
+            ...prev,
+            [property.id]: [],
+          }));
+          return;
+        }
+
+        const data = await response.json();
+
+        if (data.success) {
+          console.log("[PropertySidebar] Conversations fetched:", data.conversations?.length || 0);
+          setPropertyConversations((prev) => ({
+            ...prev,
+            [property.id]: (data.conversations || []) as Conversation[],
+          }));
+        } else {
+          console.error("[PropertySidebar] Failed to fetch conversations:", data.error);
+          setPropertyConversations((prev) => ({
+            ...prev,
+            [property.id]: [],
+          }));
+        }
+      } catch (err: any) {
+        console.error("[PropertySidebar] Error loading conversations:", err);
+        setPropertyConversations((prev) => ({
+          ...prev,
+          [property.id]: [],
+        }));
+      }
+    }
+  };
+
+  const handleConversationClick = (conversation: Conversation) => {
+    if (conversation.custom_path) {
+      router.push(`/chat/${conversation.custom_path}`);
+      onClose();
     }
   };
 
@@ -155,32 +212,106 @@ export default function PropertySidebar({
             </div>
           ) : (
             <div className="divide-y divide-gray-200">
-              {properties.map((property) => (
-                <button
-                  key={property.id}
-                  onClick={() => handlePropertyClick(property)}
-                  className="w-full px-4 py-3 text-left transition-colors hover:bg-gray-50"
-                >
-                  <div className="space-y-1">
-                    <p className="font-medium text-gray-900">
-                      {property.address || property.location || "住所不明"}
-                    </p>
-                    {property.price && (
-                      <p className="text-sm text-gray-600">
-                        {property.price.toLocaleString()}円
-                      </p>
+              {properties.map((property) => {
+                const isExpanded = expandedPropertyId === property.id;
+                const conversations = propertyConversations[property.id] || [];
+
+                return (
+                  <div key={property.id} className="border-b border-gray-200 last:border-b-0">
+                    <button
+                      onClick={() => handlePropertyClick(property)}
+                      className="w-full px-4 py-3 text-left transition-colors hover:bg-gray-50"
+                    >
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1 space-y-1">
+                          <p className="font-medium text-gray-900">
+                            {property.address || property.location || "住所不明"}
+                          </p>
+                          {property.price && (
+                            <p className="text-sm text-gray-600">
+                              {property.price.toLocaleString()}円
+                            </p>
+                          )}
+                          {property.property_type && (
+                            <p className="text-xs text-gray-500">
+                              {property.property_type}
+                            </p>
+                          )}
+                          <p className="text-xs text-gray-400">
+                            {new Date(property.created_at).toLocaleDateString("ja-JP")}
+                          </p>
+                        </div>
+                        <svg
+                          className={`h-5 w-5 text-gray-400 transition-transform ${
+                            isExpanded ? "rotate-180" : ""
+                          }`}
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M19 9l-7 7-7-7"
+                          />
+                        </svg>
+                      </div>
+                    </button>
+                    
+                    {/* 展開されたチャット履歴リスト */}
+                    {isExpanded && (
+                      <div className="border-t border-gray-100 bg-gray-50 px-4 py-3">
+                        <div className="space-y-2">
+                          <p className="text-xs font-medium text-gray-700 mb-2">
+                            チャット履歴 ({conversations.length})
+                          </p>
+                          {conversations.length === 0 ? (
+                            <p className="text-xs text-gray-500">チャット履歴がありません</p>
+                          ) : (
+                            conversations.map((conversation) => (
+                              <button
+                                key={conversation.id}
+                                onClick={() => handleConversationClick(conversation)}
+                                className={`w-full rounded-md px-3 py-2 text-sm transition-colors border ${
+                                  conversation.custom_path
+                                    ? "bg-white text-blue-600 hover:bg-blue-50 hover:text-blue-700 border-gray-200"
+                                    : "bg-gray-100 text-gray-500 border-gray-200 cursor-not-allowed"
+                                }`}
+                                disabled={!conversation.custom_path}
+                              >
+                                <div className="flex items-center justify-between">
+                                  <span className="font-medium">
+                                    {conversation.custom_path ? `/${conversation.custom_path}` : "パス未設定"}
+                                  </span>
+                                  {conversation.custom_path && (
+                                    <svg
+                                      className="h-4 w-4"
+                                      fill="none"
+                                      stroke="currentColor"
+                                      viewBox="0 0 24 24"
+                                    >
+                                      <path
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                        strokeWidth={2}
+                                        d="M9 5l7 7-7 7"
+                                      />
+                                    </svg>
+                                  )}
+                                </div>
+                                <p className="text-xs text-gray-400 mt-1">
+                                  {new Date(conversation.created_at).toLocaleDateString("ja-JP")}
+                                </p>
+                              </button>
+                            ))
+                          )}
+                        </div>
+                      </div>
                     )}
-                    {property.property_type && (
-                      <p className="text-xs text-gray-500">
-                        {property.property_type}
-                      </p>
-                    )}
-                    <p className="text-xs text-gray-400">
-                      {new Date(property.created_at).toLocaleDateString("ja-JP")}
-                    </p>
                   </div>
-                </button>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>

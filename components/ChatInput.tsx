@@ -5,9 +5,10 @@ import { useState } from "react";
 interface ChatInputProps {
   onSendMessage: (message: string) => void;
   isLoading?: boolean;
+  hasUserMessages?: boolean;
 }
 
-export default function ChatInput({ onSendMessage, isLoading = false }: ChatInputProps) {
+export default function ChatInput({ onSendMessage, isLoading = false, hasUserMessages = false }: ChatInputProps) {
   const [input, setInput] = useState("");
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -19,10 +20,8 @@ export default function ChatInput({ onSendMessage, isLoading = false }: ChatInpu
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      handleSubmit(e);
-    }
+    // Enterキーでの送信は無効化（送信ボタンのみで送信）
+    // Shift+Enterで改行は可能
   };
 
   return (
@@ -33,7 +32,7 @@ export default function ChatInput({ onSendMessage, isLoading = false }: ChatInpu
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="物件URLを入力してください（例: https://athomes.jp/...）"
+            placeholder={hasUserMessages ? "" : "物件URLを入力してください（例: https://athomes.jp/...）"}
             rows={1}
             disabled={isLoading}
             className="w-full resize-none rounded-lg border border-gray-300 px-4 py-3 text-sm text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:bg-gray-50 disabled:text-gray-500"
@@ -83,7 +82,7 @@ export default function ChatInput({ onSendMessage, isLoading = false }: ChatInpu
         </button>
       </div>
       <p className="mt-2 text-xs text-gray-500">
-        Enterで送信、Shift+Enterで改行
+        送信ボタンをクリックして送信してください
       </p>
     </form>
   );

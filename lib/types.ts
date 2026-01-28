@@ -4,6 +4,7 @@ export interface Conversation {
   id: string;
   user_id: string | null;
   title: string | null;
+  custom_path: string | null;
   created_at: string;
   updated_at: string;
   metadata: Record<string, any>;
@@ -71,5 +72,6 @@ export interface PropertyAnalysis {
   summary: string | null;
   recommendation: "buy" | "hold" | "avoid" | null;
   score: number | null;
+  investment_purpose: string | null; // 自由なテキスト（例: "利回り重視", "民泊転用", "資産防衛・節税" など）
   created_at: string;
 }
