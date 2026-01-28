@@ -11,8 +11,8 @@ const customFont = Asap_Condensed({
 });
 
 export const metadata: Metadata = {
-  title: "Real Estate",
-  description: "Real Estate Application",
+  title: "物件価値わかるくん",
+  description: "物件URLを入力して投資判断を取得",
 };
 
 export default function RootLayout({
