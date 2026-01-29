@@ -1,10 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter, useParams } from "next/navigation";
 import ChatInput from "@/components/ChatInput";
 import ChatMessage from "@/components/ChatMessage";
 import PropertyDetails from "@/components/PropertyDetails";
+import ExternalEnvironment from "@/components/ExternalEnvironment";
 import PropertySidebar from "@/components/PropertySidebar";
 import InvestmentAnalysis from "@/components/InvestmentAnalysis";
 import { Property } from "@/lib/types";
@@ -24,6 +26,8 @@ export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [propertyData, setPropertyData] = useState<any>(null);
+  const [propertyList, setPropertyList] = useState<Property[]>([]);
+  const [selectedPropertyId, setSelectedPropertyId] = useState<string | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<"property" | "environment" | "analysis">("property");
   const [waitingForPurpose, setWaitingForPurpose] = useState(false);
@@ -48,6 +52,10 @@ export default function ChatPage() {
       const data = await response.json();
 
       if (data.success) {
+        const list = (data.properties ?? []) as Property[];
+        setPropertyList(list);
+        const defaultId = data.property?.id ?? list[0]?.id ?? null;
+        setSelectedPropertyId(defaultId);
         setPropertyData({
           property: data.property,
           analysis: data.analysis,
@@ -114,7 +122,16 @@ export default function ChatPage() {
         // URLではない場合は通常のメッセージとして処理
       }
 
-      if (isUrl) {
+      if (isUrl && propertyData?.property) {
+        // 既に物件が紐づいているチャットで別URLが送られた場合
+        const assistantMessage: Message = {
+          id: (Date.now() + 1).toString(),
+          role: "assistant",
+          content: "このチャットルームでは1つの物件の分析のみが可能です。",
+          timestamp: new Date(),
+        };
+        setMessages((prev) => [...prev, assistantMessage]);
+      } else if (isUrl) {
         // 物件URLの場合、投資判断を生成
         const response = await fetch("/api/analyze", {
           method: "POST",
@@ -143,7 +160,14 @@ export default function ChatPage() {
             ...data,
             propertyDataUnavailable: data.propertyDataUnavailable ?? false,
           });
-          
+          if (data.property?.id) {
+            setPropertyList((prev) =>
+              prev.some((p) => p.id === data.property.id)
+                ? prev
+                : [...prev, data.property]
+            );
+            setSelectedPropertyId(data.property.id);
+          }
           if (data.analysisId) {
             setCurrentAnalysisId(data.analysisId);
           }
@@ -189,6 +213,20 @@ export default function ChatPage() {
 
         const purposeText = parseInvestmentPurpose(content);
 
+        // スラグで開いたチャットでは currentAnalysisId が未設定のため、propertyData.analysis.id を利用
+        const analysisIdToUse = currentAnalysisId ?? propertyData?.analysis?.id;
+        if (!analysisIdToUse) {
+          const errorMessage: Message = {
+            id: (Date.now() + 1).toString(),
+            role: "assistant",
+            content: "投資判断データが見つかりません。物件URLを再度送信してから、投資目的を入力してください。",
+            timestamp: new Date(),
+          };
+          setMessages((prev) => [...prev, errorMessage]);
+          setIsLoading(false);
+          return;
+        }
+
         try {
           const response = await fetch("/api/analyze-purpose", {
             method: "POST",
@@ -197,7 +235,7 @@ export default function ChatPage() {
             },
             body: JSON.stringify({
               propertyId: propertyData.property.id,
-              analysisId: currentAnalysisId,
+              analysisId: analysisIdToUse,
               purpose: purposeText, // 自由なテキストをそのまま送信
               conversationId: propertyData.conversationId || localStorage.getItem("currentConversationId"),
             }),
@@ -304,14 +342,52 @@ export default function ChatPage() {
           setWaitingForPurpose(false);
         }
       } else {
+        // 会話状態に応じて返答を切り替え（自由入力時）
+        const hasProperty = !!propertyData?.property;
+        const hasPurpose = !!(
+          propertyData?.analysis?.investment_purpose &&
+          propertyData.analysis.investment_purpose.trim() !== ""
+        );
+
+        const trimmedContent = content.trim();
+        const isGreeting =
+          trimmedContent.length <= 20 &&
+          (/^(こんにちは|こんばんは|おはよう|はい|やあ|どうも|よろしく)([。！!]?)$/.test(
+            trimmedContent
+          ) ||
+            /^(こんにちは|おはよう|よろしく)[、。]?\s*/.test(trimmedContent));
+
+        const greetingPrefix = isGreeting ? "こんにちは。\n\n" : "";
+
+        let replyContent: string;
+        let shouldWaitForPurpose = false;
+
+        if (!hasProperty) {
+          replyContent =
+            greetingPrefix +
+            "物件URLを入力していただければ、投資判断を行います。\n例: https://athomes.jp/...";
+        } else if (!hasPurpose) {
+          replyContent =
+            greetingPrefix +
+            "この物件について、投資目的を教えてください。\n\n1. 利回り重視\n2. 資産防衛・節税\n3. 住居兼事務所（SOHO）\n4. その他\n\n番号（1-4）または目的を入力してください。";
+          shouldWaitForPurpose = true;
+        } else {
+          replyContent =
+            greetingPrefix +
+            "この物件について、他に知りたいことはありますか？";
+        }
+
         const assistantMessage: Message = {
           id: (Date.now() + 1).toString(),
           role: "assistant",
-          content: "物件URLを入力していただければ、投資判断を行います。\n例: https://athomes.jp/...",
+          content: replyContent,
           timestamp: new Date(),
         };
 
         setMessages((prev) => [...prev, assistantMessage]);
+        if (shouldWaitForPurpose) {
+          setWaitingForPurpose(true);
+        }
       }
     } catch (error: any) {
       console.error("Error sending message:", error);
@@ -330,6 +406,30 @@ export default function ChatPage() {
         setWaitingForPurpose(false);
         setCurrentAnalysisId(null);
       }
+    }
+  };
+
+  /** 右カラムの物件一覧から物件を選択したとき */
+  const handleSelectPropertyFromList = async (property: Property) => {
+    if (selectedPropertyId === property.id) return;
+    setSelectedPropertyId(property.id);
+    setIsLoading(true);
+    try {
+      const response = await fetch(`/api/property/${property.id}`);
+      if (!response.ok) throw new Error("Failed to fetch property data");
+      const data = await response.json();
+      if (data.success) {
+        setPropertyData({
+          property: data.property,
+          analysis: data.analysis,
+          propertyDataUnavailable: data.propertyDataUnavailable ?? false,
+        });
+        setActiveTab("property");
+      }
+    } catch (error: any) {
+      console.error("Error loading property:", error);
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -425,7 +525,9 @@ export default function ChatPage() {
             </svg>
           </button>
           <div>
-            <h1 className="text-xl font-bold text-gray-900">物件価値わかるくん</h1>
+            <Link href="/" className="block">
+              <h1 className="text-xl font-bold text-gray-900 hover:opacity-80">物件価値わかるくん</h1>
+            </Link>
             <p className="mt-1 text-sm text-gray-600">
               物件URLを入力して投資判断を取得
             </p>
@@ -485,7 +587,41 @@ export default function ChatPage() {
 
       {/* 右側: 物件データ表示エリア */}
       <div className="w-1/2 overflow-y-auto bg-gray-50 p-6">
-        <div className="mx-auto max-w-2xl">
+        <div className="mx-auto max-w-2xl space-y-6">
+          {/* このチャットで言及されている物件一覧 */}
+          {propertyList.length > 0 && (
+            <section>
+              <h2 className="mb-2 text-xs font-semibold text-gray-600">
+                このチャットで言及されている物件
+              </h2>
+              <ul className="grid grid-cols-3 gap-2">
+                {propertyList.map((p) => (
+                  <li key={p.id}>
+                    <button
+                      type="button"
+                      onClick={() => handleSelectPropertyFromList(p)}
+                      className={`w-full rounded border px-2 py-2 text-left transition-colors ${
+                        selectedPropertyId === p.id
+                          ? "border-gray-400 bg-white shadow-sm"
+                          : "border-gray-200 bg-white hover:border-gray-300 hover:bg-gray-50"
+                      }`}
+                    >
+                      <div className="truncate text-xs font-medium text-gray-900">
+                        {p.title || p.address || p.location || "（タイトルなし）"}
+                      </div>
+                      {(p.price != null || p.yield_rate != null) && (
+                        <div className="mt-0.5 flex gap-2 text-[10px] text-gray-500">
+                          {p.price != null && <span>{p.price.toLocaleString()}万</span>}
+                          {p.yield_rate != null && <span>{p.yield_rate}%</span>}
+                        </div>
+                      )}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+
           {propertyData ? (
             <>
               {/* タブナビゲーション */}
@@ -508,7 +644,7 @@ export default function ChatPage() {
                       : "bg-gray-100 text-gray-600 shadow-[inset_0_2px_4px_rgba(0,0,0,0.1)] hover:bg-gray-200"
                   }`}
                 >
-                  外部的環境
+                  外部環境
                 </button>
                 <button
                   onClick={() => setActiveTab("analysis")}
@@ -532,14 +668,17 @@ export default function ChatPage() {
                   />
                 )}
                 {activeTab === "environment" && (
-                  <PropertyDetails
-                    property={propertyData.property}
-                    showTransportation={true}
-                    showBasicInfo={false}
-                    showPropertyDetails={false}
-                    showLandInfo={false}
-                    propertyDataUnavailable={propertyData.propertyDataUnavailable}
-                  />
+                  <div className="space-y-4">
+                    <PropertyDetails
+                      property={propertyData.property}
+                      showTransportation={true}
+                      showBasicInfo={false}
+                      showPropertyDetails={false}
+                      showLandInfo={false}
+                      propertyDataUnavailable={propertyData.propertyDataUnavailable}
+                    />
+                    <ExternalEnvironment propertyId={propertyData.property.id} />
+                  </div>
                 )}
                 {activeTab === "analysis" && (
                   <InvestmentAnalysis analysis={propertyData.analysis} />

@@ -48,31 +48,39 @@ export async function GET(
       console.error("[Conversation API] Error fetching messages:", messagesError);
     }
 
-    // メッセージから物件IDを取得
-    const propertyIds = [...new Set(
-      (messages || [])
-        .map((msg: any) => msg.property_id)
-        .filter(Boolean)
-    )];
+    // メッセージから物件IDを取得（会話内の出現順を維持）
+    const propertyIdsOrdered: string[] = [];
+    const seen = new Set<string>();
+    for (const msg of messages || []) {
+      const pid = (msg as any).property_id;
+      if (pid && !seen.has(pid)) {
+        seen.add(pid);
+        propertyIdsOrdered.push(pid);
+      }
+    }
 
     let property: Property | null = null;
     let analysis: PropertyAnalysis | null = null;
+    let properties: Property[] = [];
 
-    if (propertyIds.length > 0) {
-      // 最新の物件IDを使用
-      const propertyId = propertyIds[propertyIds.length - 1];
-      
-      // 物件情報を取得
-      const { data: propertyData, error: propertyError } = await supabase
+    if (propertyIdsOrdered.length > 0) {
+      // このチャットで言及されている全物件を取得
+      const { data: propertiesData, error: propertiesError } = await supabase
         .from("properties")
         .select("*")
-        .eq("id", propertyId)
-        .single();
+        .in("id", propertyIdsOrdered);
 
-      if (!propertyError && propertyData) {
-        property = propertyData as Property;
+      if (!propertiesError && propertiesData && propertiesData.length > 0) {
+        const byId = new Map(propertiesData.map((p: any) => [p.id, p as Property]));
+        properties = propertyIdsOrdered.map((id) => byId.get(id)).filter(Boolean) as Property[];
+      }
 
-        // 投資判断を取得（最新のもの）
+      // デフォルト表示用：最後に言及された物件とその投資判断
+      const propertyId = propertyIdsOrdered[propertyIdsOrdered.length - 1];
+      const propertyData = properties.find((p) => p.id === propertyId) ?? null;
+      if (propertyData) {
+        property = propertyData;
+
         const { data: analyses, error: analysesError } = await supabase
           .from("property_analyses")
           .select("*")
@@ -95,6 +103,7 @@ export async function GET(
       conversation: conversation as Conversation,
       property: property,
       analysis: analysis,
+      properties,
       propertyDataUnavailable,
       messages: (messages || []) as Message[],
     });
