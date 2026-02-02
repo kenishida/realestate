@@ -135,7 +135,6 @@ export async function POST(request: Request) {
             details: convError.details,
             hint: convError.hint,
             custom_path: customPath,
-            usingServiceRole: usingServiceRole,
           });
           
           createAttempts++;
@@ -185,7 +184,6 @@ export async function POST(request: Request) {
             id: currentConversationId,
             custom_path: customPath,
             actual_custom_path: newConversation.custom_path,
-            usingServiceRole: usingServiceRole,
           });
           
           // 実際にcustom_pathが保存されたか確認
@@ -267,7 +265,6 @@ export async function POST(request: Request) {
                 details: updateError.details,
                 conversation_id: currentConversationId,
                 custom_path: customPath,
-                usingServiceRole: usingServiceRole,
               });
               updateAttempts++;
             } else {
