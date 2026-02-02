@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+
 export default function GlobalError({
   error,
   reset,
@@ -52,7 +54,7 @@ export default function GlobalError({
               >
                 再試行
               </button>
-              <a
+              <Link
                 href="/"
                 style={{
                   display: "block",
@@ -68,7 +70,7 @@ export default function GlobalError({
                 }}
               >
                 トップへ戻る
-              </a>
+              </Link>
             </div>
           </div>
         </div>
