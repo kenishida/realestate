@@ -1,5 +1,9 @@
 # See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
 
+# グローバルgitignoreでpackage.jsonが除外されている場合は、このプロジェクトでは含める
+!package.json
+!package-lock.json
+
 # dependencies
 /node_modules
 /.pnp
