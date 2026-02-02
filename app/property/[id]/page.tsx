@@ -465,14 +465,19 @@ export default function PropertyPage() {
                   外部環境
                 </button>
                 <button
-                  onClick={() => setActiveTab("analysis")}
+                  onClick={() => {
+                    setActiveTab("analysis");
+                    if (!user) {
+                      setAuthModalOpen(true);
+                    }
+                  }}
                   className={`flex-1 rounded-full px-4 py-2.5 text-sm font-medium transition-all ${
                     activeTab === "analysis"
                       ? "bg-white text-gray-900 shadow-[0_4px_8px_rgba(0,0,0,0.15),0_2px_4px_rgba(0,0,0,0.1)]"
                       : "bg-gray-100 text-gray-600 shadow-[inset_0_2px_4px_rgba(0,0,0,0.1)] hover:bg-gray-200"
                   }`}
                 >
-                  概要
+                  投資判断
                 </button>
               </div>
 
@@ -497,24 +502,41 @@ export default function PropertyPage() {
                     <ExternalEnvironment propertyId={propertyData.property.id} />
                   </div>
                 )}
-                {activeTab === "analysis" && (() => {
-                  const selectedSim = selectedSimulationId
-                    ? cashflowSimulations.find((s) => s.id === selectedSimulationId)
-                    : null;
-                  const displayResult = selectedSim
-                    ? cashflowSimulationToResult(selectedSim)
-                    : cashflowSimulation;
-                  return (
-                    <InvestmentAnalysis
-                      analysis={propertyData.analysis}
-                      cashflowSimulation={displayResult}
-                      cashflowSimulations={cashflowSimulations}
-                      selectedSimulationId={selectedSimulationId}
-                      onSelectSimulation={setSelectedSimulationId}
-                      openSimulationTab={openSimulationTab}
-                    />
-                  );
-                })()}
+                {activeTab === "analysis" && (
+                  user ? (() => {
+                    const selectedSim = selectedSimulationId
+                      ? cashflowSimulations.find((s) => s.id === selectedSimulationId)
+                      : null;
+                    const displayResult = selectedSim
+                      ? cashflowSimulationToResult(selectedSim)
+                      : cashflowSimulation;
+                    return (
+                      <InvestmentAnalysis
+                        analysis={propertyData.analysis}
+                        cashflowSimulation={displayResult}
+                        cashflowSimulations={cashflowSimulations}
+                        selectedSimulationId={selectedSimulationId}
+                        onSelectSimulation={setSelectedSimulationId}
+                        openSimulationTab={openSimulationTab}
+                      />
+                    );
+                  })() : (
+                    <div className="rounded-lg border border-gray-200 bg-white p-6">
+                      <p className="mb-4 text-center text-gray-600">
+                        投資判断を見るにはログインが必要です
+                      </p>
+                      <div className="flex justify-center">
+                        <button
+                          type="button"
+                          onClick={() => setAuthModalOpen(true)}
+                          className="rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-gray-800"
+                        >
+                          ログイン / 新規登録
+                        </button>
+                      </div>
+                    </div>
+                  )
+                )}
               </div>
             </>
           ) : (
@@ -526,6 +548,13 @@ export default function PropertyPage() {
           )}
         </div>
       </div>
+
+      <AuthModal
+        isOpen={authModalOpen}
+        onClose={() => setAuthModalOpen(false)}
+        onSuccess={() => setAuthModalOpen(false)}
+        message="投資判断を見るにはログインが必要です"
+      />
     </div>
   );
 }
