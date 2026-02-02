@@ -93,7 +93,14 @@ export interface PropertyAnalysis {
       cash_flow?: number;
       roi?: number;
     };
+    structured?: any;
+    summary?: string;
+    full_analysis?: string;
   };
+  /** 構造化分析結果（API/DBで保存される場合） */
+  structured_analysis?: any;
+  /** セクション別スコア */
+  section_scores?: Record<string, number>;
   summary: string | null;
   recommendation: "buy" | "hold" | "avoid" | null;
   score: number | null;
