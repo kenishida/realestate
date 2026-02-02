@@ -377,7 +377,7 @@ export default function PropertyPage() {
         onSelectProperty={handleSelectProperty}
       />
 
-      <div className="flex w-1/2 flex-col border-r border-gray-200 bg-white">
+      <div className="flex w-1/2 flex-col border-r border-gray-200 bg-white md:w-1/3">
         <div className="flex items-center border-b border-gray-200 bg-white px-6 py-4">
           <button
             onClick={() => setIsSidebarOpen(true)}
@@ -431,8 +431,8 @@ export default function PropertyPage() {
         />
       </div>
 
-      <div className="w-1/2 overflow-y-auto bg-gray-50 p-6">
-        <div className="mx-auto max-w-2xl">
+      <div className="w-1/2 overflow-y-auto bg-gray-50 p-6 md:w-2/3">
+        <div className="w-full">
           {loadError ? (
             <div className="rounded-lg border border-red-200 bg-red-50 p-6 text-center text-red-700">
               {loadError}

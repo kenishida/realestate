@@ -398,7 +398,7 @@ export default function Home() {
       />
 
       {/* 左側: チャットUI */}
-      <div className="flex w-1/2 flex-col border-r border-gray-200 bg-white">
+      <div className="flex w-1/2 flex-col border-r border-gray-200 bg-white md:w-1/3">
         {/* ヘッダー */}
         <div className="flex items-center border-b border-gray-200 bg-white px-6 py-4">
           <button
@@ -482,8 +482,8 @@ export default function Home() {
       </div>
 
       {/* 右側: 物件データ表示エリア */}
-      <div className="w-1/2 overflow-y-auto bg-gray-50 p-6">
-        <div className="mx-auto max-w-2xl">
+      <div className="w-1/2 overflow-y-auto bg-gray-50 p-6 md:w-2/3">
+        <div className="w-full">
           {propertyData ? (
             <>
               {/* タブナビゲーション */}
