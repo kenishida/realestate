@@ -51,12 +51,18 @@ export default function AuthModal({ isOpen, onClose, onSuccess, message }: AuthM
         onSuccess?.();
         handleClose();
       } else {
-        const { error: err } = await signUp(email, password);
+        const { error: err, session } = await signUp(email, password);
         if (err) {
           setError(err.message || "新規登録に失敗しました");
           return;
         }
-        setSuccessMessage("確認メールを送信しました。メール内のリンクから認証を完了してください。");
+        // Confirm email がオフの場合は session が返りその場でログイン済み
+        if (session) {
+          onSuccess?.();
+          handleClose();
+        } else {
+          setSuccessMessage("確認メールを送信しました。メール内のリンクから認証を完了してください。");
+        }
       }
     } finally {
       setIsSubmitting(false);

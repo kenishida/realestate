@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import ChatInput from "@/components/ChatInput";
 import ChatMessage from "@/components/ChatMessage";
 import PropertyDetails from "@/components/PropertyDetails";
@@ -21,7 +20,6 @@ interface Message {
 }
 
 export default function Home() {
-  const router = useRouter();
   const { user, signOut, isLoading: authLoading } = useAuth();
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [authModalMessage, setAuthModalMessage] = useState<string | undefined>(undefined);
@@ -403,13 +401,13 @@ export default function Home() {
       />
 
       {/* 左側: チャットUI */}
-      <div className="flex w-1/2 flex-col border-r border-gray-200 bg-white">
-        {/* ヘッダー */}
-        <div className="flex items-center justify-between border-b border-gray-200 bg-white px-6 py-4">
-          <div className="flex items-center">
+      <div className="flex w-1/2 flex-col border-r border-gray-200 bg-white md:w-1/3">
+        {/* ヘッダー（左: メニュー + タイトル） */}
+        <header className="flex shrink-0 h-16 items-center justify-between border-b border-gray-200 bg-white px-6">
+          <div className="flex items-center gap-3">
             <button
               onClick={() => setIsSidebarOpen(true)}
-              className="mr-3 rounded-lg p-2 text-gray-600 hover:bg-gray-100 hover:text-gray-900"
+              className="rounded-lg p-2 text-gray-600 hover:bg-gray-100 hover:text-gray-900"
               aria-label="メニューを開く"
             >
               <svg
@@ -426,45 +424,11 @@ export default function Home() {
                 />
               </svg>
             </button>
-            <div>
-              <Link href="/" className="block">
-                <h1 className="text-xl font-bold text-gray-900 hover:opacity-80">物件価値わかるくん</h1>
-              </Link>
-              <p className="mt-1 text-sm text-gray-600">
-                物件URLを入力して投資判断を取得
-              </p>
-            </div>
+            <Link href="/" className="text-xl font-bold text-gray-900 hover:opacity-80">
+              物件価値わかるくん
+            </Link>
           </div>
-          {!authLoading && (
-            <div className="flex items-center gap-2">
-              {user ? (
-                <>
-                  <span className="max-w-[140px] truncate text-sm text-gray-600" title={user.email}>
-                    {user.email}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => signOut()}
-                    className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
-                  >
-                    ログアウト
-                  </button>
-                </>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setAuthModalMessage(undefined);
-                    setAuthModalOpen(true);
-                  }}
-                  className="rounded-lg bg-gray-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-gray-800"
-                >
-                  ログイン
-                </button>
-              )}
-            </div>
-          )}
-        </div>
+        </header>
 
         {/* メッセージ一覧 */}
         <div className="flex-1 overflow-y-auto px-6 py-4">
@@ -518,8 +482,27 @@ export default function Home() {
       </div>
 
       {/* 右側: 物件データ表示エリア */}
-      <div className="w-1/2 overflow-y-auto bg-gray-50 p-6">
-        <div className="mx-auto max-w-2xl">
+      <div className="flex w-1/2 flex-col bg-gray-50 md:w-2/3">
+        {/* ヘッダー（右: ログイン状態のみ） */}
+        <header className="flex shrink-0 h-16 items-center justify-end border-b border-gray-200 bg-white px-6">
+          {!authLoading && user && (
+            <div className="flex items-center gap-2">
+              <span className="max-w-[180px] truncate text-sm text-gray-600" title={user.email}>
+                {user.email}
+              </span>
+              <button
+                type="button"
+                onClick={() => signOut()}
+                className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
+              >
+                ログアウト
+              </button>
+            </div>
+          )}
+        </header>
+
+        <div className="flex-1 overflow-y-auto p-6">
+          <div className="mx-auto max-w-2xl">
           {propertyData ? (
             <>
               {/* タブナビゲーション */}
@@ -618,6 +601,7 @@ export default function Home() {
               </p>
             </div>
           )}
+          </div>
         </div>
       </div>
 
