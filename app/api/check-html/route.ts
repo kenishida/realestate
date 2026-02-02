@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createServiceRoleSupabase } from "@/lib/supabase-server";
+import { getSupabaseForApi } from "@/lib/supabase-server";
 
 /**
  * HTML保存状況を確認するエンドポイント
@@ -16,13 +16,11 @@ export async function GET(request: Request) {
       );
     }
 
-    let supabase;
-    try {
-      supabase = createServiceRoleSupabase();
-    } catch {
+    const { supabase, error: supabaseError } = await getSupabaseForApi();
+    if (supabaseError || !supabase) {
       return NextResponse.json(
-        { error: "Supabase client not available" },
-        { status: 500 }
+        { error: supabaseError ?? "Database is not available.", code: "SUPABASE_CONFIG" },
+        { status: 503 }
       );
     }
 

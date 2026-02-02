@@ -1,31 +1,39 @@
 /**
  * investment_purposeカラムとUPDATE権限の確認スクリプト
+ * ※ .env.local を先に読み込んでから supabase-server を動的インポートする必要があります
  */
-import { readFileSync } from "fs";
+import { readFileSync, existsSync } from "fs";
 import { resolve } from "path";
 
-// .env.localファイルを手動で読み込む
-try {
-  const envFile = readFileSync(resolve(process.cwd(), ".env.local"), "utf-8");
-  envFile.split("\n").forEach((line) => {
-    const [key, ...valueParts] = line.split("=");
-    if (key && valueParts.length > 0) {
-      const value = valueParts.join("=").trim();
-      if (!process.env[key.trim()]) {
-        process.env[key.trim()] = value.replace(/^["']|["']$/g, "");
-      }
-    }
-  });
-} catch (error) {
-  console.warn("⚠️  .env.localファイルを読み込めませんでした（これは問題ない場合があります）");
+function loadEnvLocal() {
+  const path = resolve(process.cwd(), ".env.local");
+  if (!existsSync(path)) {
+    console.warn("⚠️  .env.local が見つかりません（プロジェクトルートに作成してください）");
+    return;
+  }
+  try {
+    const envFile = readFileSync(path, "utf-8");
+    envFile.split("\n").forEach((line) => {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) return;
+      const eq = trimmed.indexOf("=");
+      if (eq <= 0) return;
+      const key = trimmed.slice(0, eq).trim();
+      const value = trimmed.slice(eq + 1).trim().replace(/^["']|["']$/g, "");
+      if (key && !process.env[key]) process.env[key] = value;
+    });
+  } catch (e) {
+    console.warn("⚠️  .env.local の読み込みに失敗しました:", (e as Error).message);
+  }
 }
 
-import { createServiceRoleSupabase } from "../lib/supabase-server";
+loadEnvLocal();
 
 async function checkInvestmentPurpose() {
+  const { createServiceRoleSupabase } = await import("../lib/supabase-server");
+
   console.log("=== investment_purposeカラムとUPDATE権限の確認 ===\n");
 
-  // 環境変数の確認
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
@@ -33,7 +41,7 @@ async function checkInvestmentPurpose() {
     console.error("環境変数が設定されていません:");
     console.error(`  NEXT_PUBLIC_SUPABASE_URL: ${supabaseUrl ? "✓" : "✗"}`);
     console.error(`  SUPABASE_SERVICE_ROLE_KEY: ${serviceRoleKey ? "✓" : "✗"}`);
-    console.error("\n.env.localファイルを確認してください。");
+    console.error("\n.env.local に上記を設定してから再度実行してください。");
     process.exit(1);
   }
 

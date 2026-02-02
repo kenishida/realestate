@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createServerSupabase, createServiceRoleSupabase } from "@/lib/supabase-server";
+import { getSupabaseForApi } from "@/lib/supabase-server";
 import { generateTextWithGemini } from "@/lib/gemini";
 import type { PropertyAnalysis } from "@/lib/types";
 
@@ -39,14 +39,12 @@ export async function POST(request: Request) {
     
     // customPurposeパラメータは不要になったが、後方互換性のため残す（使用しない）
 
-    // RLSをバイパスするためにService Role Supabaseを使用
-    let supabase;
-    try {
-      supabase = createServiceRoleSupabase();
-      console.log("[Analyze Purpose] Using Service Role Supabase client");
-    } catch (error: any) {
-      console.warn("[Analyze Purpose] Service Role Key not available, using regular Supabase client:", error.message);
-      supabase = await createServerSupabase();
+    const { supabase, error: supabaseError } = await getSupabaseForApi();
+    if (supabaseError || !supabase) {
+      return NextResponse.json(
+        { success: false, error: supabaseError ?? "Database is not available.", code: "SUPABASE_CONFIG" },
+        { status: 503 }
+      );
     }
 
     // 既存の分析を取得
@@ -95,7 +93,7 @@ export async function POST(request: Request) {
     const structuredAnalysis = existingAnalysis.structured_analysis || {};
     const existingFinalJudgment = structuredAnalysis.final_judgment || {};
 
-    // 投資目的に応じた詳細分析を生成
+    // 投資目的に応じた詳細分析を生成（物件への投資判断と同様に固定フォーマットで出力させる）
     const purposeAnalysisPrompt = `以下の物件情報と投資判断結果を基に、「${purposeLabel}」という投資目的に特化した追加分析を行ってください。
 
 【物件情報】
@@ -103,7 +101,7 @@ export async function POST(request: Request) {
 - 価格: ${property.price ? property.price.toLocaleString() + "円" : "不明"}
 - 所在地: ${property.address || property.location || "不明"}
 - 間取り: ${property.floor_plan || "不明"}
-- 築年数: ${property.year_built !== null ? property.year_built + "年" : "不明"}
+- 築年数: ${property.year_built != null ? (property.year_built >= 1900 ? new Date().getFullYear() - property.year_built : property.year_built) + "年" : "不明"}
 
 【既存の投資判断】
 ${existingAnalysis.summary || "投資判断が完了しています。"}
@@ -114,14 +112,44 @@ ${purposeLabel}
 【既存の最終判断（参考）】
 ${existingFinalJudgment[purpose]?.recommendation || "未設定"}
 
-以下の観点から、この投資目的に特化した詳細な分析とアドバイスを提供してください：
+以下の観点から、この投資目的に特化した詳細な分析とアドバイスを提供してください。
+出力は必ず以下の4つのセクションで、見出しは「## 1. 〜」の形式で書いてください。
 
-1. この投資目的にとってのメリット・デメリット
-2. 具体的な注意点やリスク
-3. 推奨されるアクション
-4. この投資目的に適しているかどうかの評価
+## 1. メリット・デメリット
+（この投資目的にとってのメリット・デメリットを記述）
 
-簡潔で実用的なアドバイスを提供してください。`;
+## 2. 注意点・リスク
+（具体的な注意点やリスクを記述）
+
+## 3. 推奨アクション
+（推奨されるアクションを記述）
+
+## 4. 評価
+（この投資目的に適しているかどうかの評価を記述）
+
+【重要】
+- 上記4つの見出し（## 1. 〜 など）を必ず含めてください
+- 見出し以外ではMarkdown記法（**太字**、###など）は使わず、プレーンテキストで記述してください
+- 簡潔で実用的なアドバイスを提供してください`;
+
+    // 投資目的分析テキストをセクション単位でパース（物件への投資判断と同様の構造化）
+    const parsePurposeAnalysis = (text: string): {
+      merits_demerits: string;
+      risks: string;
+      recommended_actions: string;
+      evaluation: string;
+    } => {
+      const section = (pattern: RegExp) => {
+        const m = text.match(pattern);
+        return m ? m[1].trim() : "";
+      };
+      return {
+        merits_demerits: section(/##\s*1\.\s*メリット・デメリット\s*[\n\r]+([\s\S]*?)(?=##\s*2\.|$)/i),
+        risks: section(/##\s*2\.\s*注意点・リスク\s*[\n\r]+([\s\S]*?)(?=##\s*3\.|$)/i),
+        recommended_actions: section(/##\s*3\.\s*推奨アクション\s*[\n\r]+([\s\S]*?)(?=##\s*4\.|$)/i),
+        evaluation: section(/##\s*4\.\s*評価\s*[\n\r]+([\s\S]*?)$/i),
+      };
+    };
 
     console.log("[Analyze Purpose] Generating purpose-specific analysis...");
     let purposeAnalysisText: string;
@@ -140,7 +168,20 @@ ${existingFinalJudgment[purpose]?.recommendation || "未設定"}
       );
     }
 
-    // 既存のstructured_analysisを更新
+    // パースして構造化データを取得（パース失敗時は全文を evaluation に格納してフォールバック）
+    const parsed = parsePurposeAnalysis(purposeAnalysisText);
+    const hasStructuredSections =
+      parsed.merits_demerits || parsed.risks || parsed.recommended_actions || parsed.evaluation;
+    const purposeStructured = hasStructuredSections
+      ? parsed
+      : {
+          merits_demerits: "",
+          risks: "",
+          recommended_actions: "",
+          evaluation: purposeAnalysisText,
+        };
+
+    // 既存のstructured_analysisを更新（purpose_specific_analysis は構造化オブジェクトで保存）
     const updatedStructuredAnalysis = {
       ...structuredAnalysis,
       final_judgment: {
@@ -153,7 +194,7 @@ ${existingFinalJudgment[purpose]?.recommendation || "未設定"}
       },
       purpose_specific_analysis: {
         ...(structuredAnalysis.purpose_specific_analysis || {}),
-        [purpose]: purposeAnalysisText,
+        [purpose]: purposeStructured,
       },
     };
 

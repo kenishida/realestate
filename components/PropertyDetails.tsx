@@ -1,5 +1,7 @@
 "use client";
 
+import PropertyMapEmbed from "./PropertyMapEmbed";
+
 interface PropertyDetailsProps {
   property: {
     id: string;
@@ -24,6 +26,8 @@ interface PropertyDetailsProps {
     building_coverage_ratio: number | null;
     land_category: string | null;
     zoning: string | null;
+    urban_planning: string | null;
+    land_rights: string | null;
     transportation: Array<{ line: string; station: string; walk: string }> | null;
     yield_rate: number | null;
   };
@@ -153,12 +157,25 @@ export default function PropertyDetails({
               />
               <TableRow
                 label="所在地"
-                value={property.address || property.location || <span className="text-gray-400">-</span>}
+                value={
+                  (() => {
+                    const addr = property.address || property.location;
+                    if (!addr) return <span className="text-gray-400">-</span>;
+                    // 「地図で見る」などの余分なテキストを削除
+                    const cleanAddr = addr.replace(/\s*地図で見る\s*/g, "").trim();
+                    return <span>{cleanAddr}</span>;
+                  })()
+                }
                 colSpan={1}
               />
             </tbody>
           </table>
         </div>
+        {(property.address || property.location) && (
+          <div className="px-4 pb-4">
+            <PropertyMapEmbed address={property.address || property.location || ""} />
+          </div>
+        )}
       </div>
       )}
 
@@ -188,8 +205,11 @@ export default function PropertyDetails({
                 value={
                   property.year_built !== null ? (
                     <span className="text-gray-900">
-                      {property.year_built}年
-                      {property.year_built_month && ` ${property.year_built_month}月`}
+                      {property.year_built >= 1900
+                        ? property.year_built
+                        : new Date().getFullYear() - property.year_built}
+                      年
+                      {property.year_built_month != null ? `${property.year_built_month}月` : ""}
                     </span>
                   ) : (
                     <span className="text-gray-400">-</span>
@@ -349,6 +369,14 @@ export default function PropertyDetails({
               <TableRow
                 label="地目"
                 value={property.land_category || <span className="text-gray-400">-</span>}
+              />
+              <TableRow
+                label="都市計画"
+                value={property.urban_planning || <span className="text-gray-400">-</span>}
+              />
+              <TableRow
+                label="土地権利"
+                value={property.land_rights || <span className="text-gray-400">-</span>}
               />
               <TableRow
                 label="用途地域"
