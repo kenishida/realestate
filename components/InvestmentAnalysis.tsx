@@ -127,7 +127,7 @@ export default function InvestmentAnalysis({
 
   return (
     <div className="space-y-6">
-      {/* サブタブナビゲーション: 概要 | 投資目的 | 収支シミュレーション */}
+      {/* サブタブナビゲーション: 投資判断 | 投資目的 | 収支シミュレーション */}
       <div className="flex border-b border-gray-200">
         <button
           onClick={() => setSubTab("property")}
@@ -137,7 +137,7 @@ export default function InvestmentAnalysis({
               : "text-gray-500 hover:text-gray-700"
           }`}
         >
-          概要
+          投資判断
         </button>
         {hasPurposeAnalysis && (
           <button

@@ -9,6 +9,8 @@ import PropertyDetails from "@/components/PropertyDetails";
 import PropertySidebar from "@/components/PropertySidebar";
 import InvestmentAnalysis from "@/components/InvestmentAnalysis";
 import ExternalEnvironment from "@/components/ExternalEnvironment";
+import AuthModal from "@/components/AuthModal";
+import { useAuth } from "@/lib/auth-context";
 import { Property } from "@/lib/types";
 
 interface Message {
@@ -20,6 +22,9 @@ interface Message {
 
 export default function Home() {
   const router = useRouter();
+  const { user, signOut, isLoading: authLoading } = useAuth();
+  const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [authModalMessage, setAuthModalMessage] = useState<string | undefined>(undefined);
   const [messages, setMessages] = useState<Message[]>([
     {
       id: "1",
@@ -400,34 +405,65 @@ export default function Home() {
       {/* 左側: チャットUI */}
       <div className="flex w-1/2 flex-col border-r border-gray-200 bg-white">
         {/* ヘッダー */}
-        <div className="flex items-center border-b border-gray-200 bg-white px-6 py-4">
-          <button
-            onClick={() => setIsSidebarOpen(true)}
-            className="mr-3 rounded-lg p-2 text-gray-600 hover:bg-gray-100 hover:text-gray-900"
-            aria-label="メニューを開く"
-          >
-            <svg
-              className="h-6 w-6"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
+        <div className="flex items-center justify-between border-b border-gray-200 bg-white px-6 py-4">
+          <div className="flex items-center">
+            <button
+              onClick={() => setIsSidebarOpen(true)}
+              className="mr-3 rounded-lg p-2 text-gray-600 hover:bg-gray-100 hover:text-gray-900"
+              aria-label="メニューを開く"
             >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M4 6h16M4 12h16M4 18h16"
-              />
-            </svg>
-          </button>
-          <div>
-            <Link href="/" className="block">
-              <h1 className="text-xl font-bold text-gray-900 hover:opacity-80">物件価値わかるくん</h1>
-            </Link>
-            <p className="mt-1 text-sm text-gray-600">
-              物件URLを入力して投資判断を取得
-            </p>
+              <svg
+                className="h-6 w-6"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M4 6h16M4 12h16M4 18h16"
+                />
+              </svg>
+            </button>
+            <div>
+              <Link href="/" className="block">
+                <h1 className="text-xl font-bold text-gray-900 hover:opacity-80">物件価値わかるくん</h1>
+              </Link>
+              <p className="mt-1 text-sm text-gray-600">
+                物件URLを入力して投資判断を取得
+              </p>
+            </div>
           </div>
+          {!authLoading && (
+            <div className="flex items-center gap-2">
+              {user ? (
+                <>
+                  <span className="max-w-[140px] truncate text-sm text-gray-600" title={user.email}>
+                    {user.email}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => signOut()}
+                    className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                  >
+                    ログアウト
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAuthModalMessage(undefined);
+                    setAuthModalOpen(true);
+                  }}
+                  className="rounded-lg bg-gray-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-gray-800"
+                >
+                  ログイン
+                </button>
+              )}
+            </div>
+          )}
         </div>
 
         {/* メッセージ一覧 */}
@@ -509,7 +545,13 @@ export default function Home() {
                   外部環境あ
                 </button>
                 <button
-                  onClick={() => setActiveTab("analysis")}
+                  onClick={() => {
+                    setActiveTab("analysis");
+                    if (!user) {
+                      setAuthModalMessage("投資判断を見るにはログインが必要です");
+                      setAuthModalOpen(true);
+                    }
+                  }}
                   className={`flex-1 rounded-full px-4 py-2.5 text-sm font-medium transition-all ${
                     activeTab === "analysis"
                       ? "bg-white text-gray-900 shadow-[0_4px_8px_rgba(0,0,0,0.15),0_2px_4px_rgba(0,0,0,0.1)]"
@@ -543,7 +585,29 @@ export default function Home() {
                   </div>
                 )}
                 {activeTab === "analysis" && (
-                  <InvestmentAnalysis analysis={propertyData.analysis} />
+                  <>
+                    {user ? (
+                      <InvestmentAnalysis analysis={propertyData.analysis} />
+                    ) : (
+                      <div className="rounded-lg border border-gray-200 bg-white p-6">
+                        <p className="mb-4 text-center text-gray-600">
+                          投資判断を見るにはログインが必要です
+                        </p>
+                        <div className="flex justify-center">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setAuthModalMessage("投資判断を見るにはログインが必要です");
+                              setAuthModalOpen(true);
+                            }}
+                            className="rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-gray-800"
+                          >
+                            ログイン / 新規登録
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
             </>
@@ -556,6 +620,13 @@ export default function Home() {
           )}
         </div>
       </div>
+
+      <AuthModal
+        isOpen={authModalOpen}
+        onClose={() => setAuthModalOpen(false)}
+        onSuccess={() => setAuthModalOpen(false)}
+        message={authModalMessage}
+      />
     </div>
   );
 }

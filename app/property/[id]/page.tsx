@@ -9,6 +9,8 @@ import PropertyDetails from "@/components/PropertyDetails";
 import PropertySidebar from "@/components/PropertySidebar";
 import InvestmentAnalysis from "@/components/InvestmentAnalysis";
 import ExternalEnvironment from "@/components/ExternalEnvironment";
+import AuthModal from "@/components/AuthModal";
+import { useAuth } from "@/lib/auth-context";
 import { computeCashflow, cashflowSimulationToResult } from "@/lib/cashflow-simulation";
 import type { CashflowResult } from "@/lib/cashflow-simulation";
 import type { CashflowSimulation } from "@/lib/types";
@@ -69,6 +71,8 @@ const DEFAULT_DOWN_PAYMENT = 10_000_000; // 1,000万円
 export default function PropertyPage() {
   const params = useParams();
   const id = params?.id as string;
+  const { user } = useAuth();
+  const [authModalOpen, setAuthModalOpen] = useState(false);
 
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(true);
