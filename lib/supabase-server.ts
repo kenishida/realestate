@@ -65,3 +65,24 @@ export function createServiceRoleSupabase() {
     },
   });
 }
+
+/** API 用: Supabase クライアントを取得。失敗時は throw せず error を返す */
+export async function getSupabaseForApi(): Promise<
+  | { supabase: Awaited<ReturnType<typeof createServerSupabase>>; error: null }
+  | { supabase: null; error: string }
+> {
+  try {
+    const supabase = createServiceRoleSupabase();
+    return { supabase, error: null };
+  } catch {
+    try {
+      const supabase = await createServerSupabase();
+      return { supabase, error: null };
+    } catch (e: any) {
+      const msg =
+        e?.message ||
+        "Supabase の環境変数が未設定です。.env.local に NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY, および（推奨）SUPABASE_SERVICE_ROLE_KEY を設定してください。";
+      return { supabase: null, error: msg };
+    }
+  }
+}

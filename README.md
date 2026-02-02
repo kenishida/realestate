@@ -31,6 +31,9 @@ GEMINI_API_KEY=your_gemini_api_key
 NEXT_PUBLIC_SUPABASE_URL=your_supabase_url
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
 SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_role_key
+
+# 外部環境リサーチ（学校・病院・スーパー・コンビニ）用（任意）
+GOOGLE_MAPS_API_KEY=your_google_maps_api_key
 ```
 
 ### 3. データベースのセットアップ
@@ -39,6 +42,7 @@ SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_role_key
 2. Supabase SQLエディタで以下のマイグレーションを順番に実行：
    - `migrations/create_chat_schema.sql` - 基本スキーマの作成
    - `migrations/setup_investment_purpose.sql` - 投資目的機能のセットアップ（**重要**）
+   - `migrations/add_property_external_env.sql` - 外部環境データ用テーブル（住所取得後の学校・病院・スーパー・コンビニ表示に利用）
 
 **投資目的機能のセットアップ手順：**
 1. Supabaseダッシュボードを開く

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createServerSupabase, createServiceRoleSupabase } from "@/lib/supabase-server";
+import { getSupabaseForApi } from "@/lib/supabase-server";
 import type { Conversation } from "@/lib/types";
 
 /**
@@ -12,11 +12,12 @@ export async function GET(
   try {
     const { id: propertyId } = await params;
 
-    let supabase;
-    try {
-      supabase = createServiceRoleSupabase();
-    } catch {
-      supabase = await createServerSupabase();
+    const { supabase, error: supabaseError } = await getSupabaseForApi();
+    if (supabaseError || !supabase) {
+      return NextResponse.json(
+        { success: false, error: supabaseError ?? "Database is not available.", code: "SUPABASE_CONFIG" },
+        { status: 503 }
+      );
     }
 
     // この物件に関連するメッセージを取得

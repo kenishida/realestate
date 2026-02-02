@@ -1,12 +1,14 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import ChatInput from "@/components/ChatInput";
 import ChatMessage from "@/components/ChatMessage";
 import PropertyDetails from "@/components/PropertyDetails";
 import PropertySidebar from "@/components/PropertySidebar";
 import InvestmentAnalysis from "@/components/InvestmentAnalysis";
+import ExternalEnvironment from "@/components/ExternalEnvironment";
 import { Property } from "@/lib/types";
 
 interface Message {
@@ -419,7 +421,9 @@ export default function Home() {
             </svg>
           </button>
           <div>
-            <h1 className="text-xl font-bold text-gray-900">物件価値わかるくん</h1>
+            <Link href="/" className="block">
+              <h1 className="text-xl font-bold text-gray-900 hover:opacity-80">物件価値わかるくん</h1>
+            </Link>
             <p className="mt-1 text-sm text-gray-600">
               物件URLを入力して投資判断を取得
             </p>
@@ -502,7 +506,7 @@ export default function Home() {
                       : "bg-gray-100 text-gray-600 shadow-[inset_0_2px_4px_rgba(0,0,0,0.1)] hover:bg-gray-200"
                   }`}
                 >
-                  外部的環境
+                  外部環境
                 </button>
                 <button
                   onClick={() => setActiveTab("analysis")}
@@ -512,7 +516,7 @@ export default function Home() {
                       : "bg-gray-100 text-gray-600 shadow-[inset_0_2px_4px_rgba(0,0,0,0.1)] hover:bg-gray-200"
                   }`}
                 >
-                  投資判断
+                  概要
                 </button>
               </div>
 
@@ -526,14 +530,17 @@ export default function Home() {
                   />
                 )}
                 {activeTab === "environment" && (
-                  <PropertyDetails
-                    property={propertyData.property}
-                    showTransportation={true}
-                    showBasicInfo={false}
-                    showPropertyDetails={false}
-                    showLandInfo={false}
-                    propertyDataUnavailable={propertyData.propertyDataUnavailable}
-                  />
+                  <div className="space-y-4">
+                    <PropertyDetails
+                      property={propertyData.property}
+                      showTransportation={true}
+                      showBasicInfo={false}
+                      showPropertyDetails={false}
+                      showLandInfo={false}
+                      propertyDataUnavailable={propertyData.propertyDataUnavailable}
+                    />
+                    <ExternalEnvironment propertyId={propertyData.property.id} />
+                  </div>
                 )}
                 {activeTab === "analysis" && (
                   <InvestmentAnalysis analysis={propertyData.analysis} />

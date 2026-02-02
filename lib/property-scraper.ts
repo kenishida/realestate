@@ -11,8 +11,8 @@ export interface ScrapedPropertyData {
   
   // 詳細情報
   floor_plan: string | null; // 間取り
-  year_built: number | null; // 築年数
-  year_built_month: number | null; // 築年月（月）
+  year_built: number | null; // 築年（西暦、例: 1998）
+  year_built_month: number | null; // 築月（1–12）
   building_area: number | null; // 建物面積（㎡）
   land_area: number | null; // 土地面積（㎡）
   building_floors: string | null; // 階建（例: "3階建"）
@@ -24,6 +24,8 @@ export interface ScrapedPropertyData {
   building_coverage_ratio: number | null; // 建ぺい率（%）
   land_category: string | null; // 地目
   zoning: string | null; // 用途地域
+  urban_planning: string | null; // 都市計画区域（市街化区域など）
+  land_rights: string | null; // 土地権利（所有権、借地権など）
   transportation: Array<{ line: string; station: string; walk: string }>; // 交通情報
   
   // その他
@@ -149,6 +151,8 @@ async function scrapeAthomes(url: string, html?: string): Promise<ScrapedPropert
       building_coverage_ratio: null,
       land_category: null,
       zoning: null,
+      urban_planning: null,
+      land_rights: null,
       transportation: [],
       yield_rate: null,
       raw_data: {},
@@ -250,12 +254,14 @@ async function scrapeAthomes(url: string, html?: string): Promise<ScrapedPropert
       }
     }
     if (yearBuiltText) {
+      const currentYear = new Date().getFullYear();
       const yearMatch = yearBuiltText.match(/(\d{4})年/);
       const monthMatch = yearBuiltText.match(/(\d{1,2})月/);
+      const ageMatch = yearBuiltText.match(/築\s*(\d+)\s*年/);
       if (yearMatch) {
-        const builtYear = parseInt(yearMatch[1], 10);
-        const currentYear = new Date().getFullYear();
-        data.year_built = currentYear - builtYear;
+        data.year_built = parseInt(yearMatch[1], 10);
+      } else if (ageMatch) {
+        data.year_built = currentYear - parseInt(ageMatch[1], 10);
       }
       if (monthMatch) {
         data.year_built_month = parseInt(monthMatch[1], 10);
@@ -280,10 +286,14 @@ async function scrapeAthomes(url: string, html?: string): Promise<ScrapedPropert
         areaText += " " + text;
       }
     }
-    // ページ全体から面積情報を検索
+    // ページ全体から面積情報を検索（㎡/m2/m²/平米に対応）
     const bodyText = $("body").text();
-    const buildingAreaMatch = bodyText.match(/建物[面積]*[：:]*\s*([\d.]+)\s*㎡/);
-    const landAreaMatch = bodyText.match(/土地[面積]*[：:]*\s*([\d.]+)\s*㎡/);
+    const buildingAreaMatch =
+      bodyText.match(/建物[面積]*[：:]\s*(?:合計)?\s*([\d.]+)\s*(?:㎡|m2|m²|平米)/) ??
+      bodyText.match(/建物[面積]*[：:]*\s*([\d.]+)\s*(?:㎡|m2|m²|平米)/);
+    const landAreaMatch =
+      bodyText.match(/土地[面積]*[：:]\s*([\d.]+)\s*(?:㎡|m2|m²|平米)/) ??
+      bodyText.match(/土地[面積]*[：:]*\s*([\d.]+)\s*(?:㎡|m2|m²|平米)/);
     if (buildingAreaMatch) {
       data.building_area = parseFloat(buildingAreaMatch[1]);
     }
@@ -495,7 +505,43 @@ async function scrapeAthomes(url: string, html?: string): Promise<ScrapedPropert
         break;
       }
     }
-    console.log("[Scraper] Zoning found:", data.zoning, "Land category:", data.land_category);
+
+    // 都市計画区域（市街化区域、市街化調整区域など）
+    const urbanPlanningSelectors = [
+      "dt:contains('都市計画') + dd",
+      "th:contains('都市計画') + td",
+      "[data-name*='都市計画']",
+    ];
+    for (const selector of urbanPlanningSelectors) {
+      const text = $(selector).first().text().trim();
+      if (text) {
+        data.urban_planning = text;
+        break;
+      }
+    }
+
+    // 土地権利（所有権、借地権など）
+    const landRightsSelectors = [
+      "dt:contains('土地権利') + dd",
+      "th:contains('土地権利') + td",
+      "[data-name*='土地権利']",
+    ];
+    for (const selector of landRightsSelectors) {
+      const text = $(selector).first().text().trim();
+      if (text) {
+        data.land_rights = text;
+        break;
+      }
+    }
+    if (!data.land_rights) {
+      const bodyTextForRights = $("body").text();
+      const landRightsMatch = bodyTextForRights.match(/土地権利[：:]*\s*([^\n\s]+(?:\s+[^\n\s]+)*?)(?:\s{2,}|\n|$)/);
+      if (landRightsMatch) {
+        data.land_rights = landRightsMatch[1].trim();
+      }
+    }
+
+    console.log("[Scraper] Zoning found:", data.zoning, "Land category:", data.land_category, "Urban planning:", data.urban_planning, "Land rights:", data.land_rights);
 
     // 利回り
     const yieldText = $("[class*='yield'], [data-name*='利回り']").first().text();
@@ -526,6 +572,8 @@ async function scrapeAthomes(url: string, html?: string): Promise<ScrapedPropert
         land_area: !!data.land_area,
         building_structure: !!data.building_structure,
         zoning: !!data.zoning,
+        urban_planning: !!data.urban_planning,
+        land_rights: !!data.land_rights,
       },
     };
 

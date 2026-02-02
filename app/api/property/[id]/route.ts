@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { createServerSupabase, createServiceRoleSupabase } from "@/lib/supabase-server";
-import type { Property, PropertyAnalysis, Message, Conversation } from "@/lib/types";
+import { getSupabaseForApi } from "@/lib/supabase-server";
+import type { Property, PropertyAnalysis, Message, Conversation, CashflowSimulation } from "@/lib/types";
 
 /**
  * 物件IDから物件情報、会話履歴、投資判断を取得するエンドポイント
@@ -12,11 +12,16 @@ export async function GET(
   try {
     const { id: propertyId } = await params;
 
-    let supabase;
-    try {
-      supabase = createServiceRoleSupabase();
-    } catch {
-      supabase = await createServerSupabase();
+    const { supabase, error: supabaseError } = await getSupabaseForApi();
+    if (supabaseError || !supabase) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: supabaseError ?? "Database is not available.",
+          code: "SUPABASE_CONFIG",
+        },
+        { status: 503 }
+      );
     }
 
     // 物件情報を取得
@@ -108,6 +113,17 @@ export async function GET(
       !!(p?.title || p?.address || p?.floor_plan);
     const propertyDataUnavailable = !!property && !hasKeyData(property as Property);
 
+    const analysis = analyses && analyses.length > 0 ? (analyses[0] as PropertyAnalysis) : null;
+    let cashflowSimulations: CashflowSimulation[] = [];
+    if (analysis?.id) {
+      const { data: sims, error: simsError } = await supabase
+        .from("cashflow_simulations")
+        .select("*")
+        .eq("property_analysis_id", analysis.id)
+        .order("created_at", { ascending: false });
+      if (!simsError && sims) cashflowSimulations = sims as CashflowSimulation[];
+    }
+
     // メッセージから会話IDを取得
     const conversationIds = [...new Set(messages.map((m: Message) => m.conversation_id).filter(Boolean))];
     
@@ -130,7 +146,8 @@ export async function GET(
     return NextResponse.json({
       success: true,
       property: property as Property,
-      analysis: analyses && analyses.length > 0 ? (analyses[0] as PropertyAnalysis) : null,
+      analysis,
+      cashflowSimulations,
       propertyDataUnavailable,
       conversations: conversations || [],
       messages: messages,

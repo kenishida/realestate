@@ -654,7 +654,7 @@ export default function ChatPage() {
                       : "bg-gray-100 text-gray-600 shadow-[inset_0_2px_4px_rgba(0,0,0,0.1)] hover:bg-gray-200"
                   }`}
                 >
-                  投資判断
+                  概要
                 </button>
               </div>
 

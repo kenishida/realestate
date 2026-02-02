@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createServerSupabase, createServiceRoleSupabase } from "@/lib/supabase-server";
+import { getSupabaseForApi } from "@/lib/supabase-server";
 import { generateTextWithGemini } from "@/lib/gemini";
 import { scrapePropertyData, fetchPropertyHTML, isBlockedOrRedirectPage } from "@/lib/property-scraper";
 import type { Property, PropertyAnalysis } from "@/lib/types";
@@ -14,6 +14,28 @@ function generateRandomPath(): string {
   // 8文字のランダムな文字列を生成
   const bytes = randomBytes(6); // 6バイト = 8文字（base64エンコード後）
   return bytes.toString('base64url').substring(0, 8).toLowerCase();
+}
+
+/**
+ * 物件URLを正規化する（クエリ・ハッシュを除去し、同一物件を同じキーで扱う）
+ * 例: https://www.athome.co.jp/buy_other/1014743491/?BKLISTID=001LPC → https://www.athome.co.jp/buy_other/1014743491/
+ */
+function normalizePropertyUrl(urlString: string): string {
+  const u = new URL(urlString);
+  u.search = "";
+  u.hash = "";
+  return u.toString();
+}
+
+/** 築年数と築年月の表示用文字列を取得（year_built が西暦または旧形式の築年数の両方に対応） */
+function getBuiltYearInfo(yearBuilt: number | null, yearBuiltMonth: number | null): { ageYears: number | null; dateStr: string } {
+  if (yearBuilt == null) return { ageYears: null, dateStr: "不明" };
+  const currentYear = new Date().getFullYear();
+  const isSeireki = yearBuilt >= 1900;
+  const builtYear = isSeireki ? yearBuilt : currentYear - yearBuilt;
+  const ageYears = currentYear - builtYear;
+  const monthPart = yearBuiltMonth != null ? `${yearBuiltMonth}月` : "";
+  return { ageYears: ageYears >= 0 ? ageYears : null, dateStr: `${builtYear}年${monthPart}` };
 }
 
 /**
@@ -50,20 +72,15 @@ export async function POST(request: Request) {
       );
     }
 
-    // RLSをバイパスするためにService Role Supabaseを使用
-    // 認証が必要な場合は、createServerSupabase()に変更
-    let supabase;
-    let usingServiceRole = false;
-    try {
-      supabase = createServiceRoleSupabase();
-      usingServiceRole = true;
-      console.log("[Analyze] ✓ Using Service Role Supabase client (RLS bypassed)");
-    } catch (error: any) {
-      // Service Role Keyが設定されていない場合は通常のSupabaseクライアントを使用
-      console.warn("[Analyze] ⚠️  Service Role Key not available, using regular Supabase client:", error.message);
-      supabase = await createServerSupabase();
-      console.log("[Analyze] ⚠️  Using regular Supabase client (RLS policies will apply)");
-      console.log("[Analyze] ⚠️  This may cause permission errors if RLS policies are too restrictive");
+    const normalizedUrl = normalizePropertyUrl(url);
+
+    const { supabase, error: supabaseError } = await getSupabaseForApi();
+    if (supabaseError || !supabase) {
+      console.error("[Analyze] Supabase init failed:", supabaseError);
+      return NextResponse.json(
+        { success: false, error: supabaseError ?? "Database is not available.", code: "SUPABASE_CONFIG" },
+        { status: 503 }
+      );
     }
 
     // 会話IDが指定されていない場合は、新しい会話を作成
@@ -274,27 +291,41 @@ export async function POST(request: Request) {
       }
     }
 
-    // 既存の物件データをチェック
-    const { data: existingProperty, error: selectError } = await supabase
+    // 既存の物件データをチェック（正規化URLで検索、なければ元のURLでも検索）
+    let existingProperty: Property | null = null;
+    const { data: byNormalized, error: errNormalized } = await supabase
       .from("properties")
       .select("*")
-      .eq("url", url)
-      .single();
-
-    if (selectError && selectError.code !== "PGRST116") {
-      console.error("[Analyze] Error checking existing property:", selectError);
+      .eq("url", normalizedUrl)
+      .maybeSingle();
+    if (errNormalized) {
+      console.error("[Analyze] Error checking existing property (normalized):", errNormalized);
       return NextResponse.json(
-        { 
-          success: false,
-          error: "Failed to check existing property",
-          details: selectError.message 
-        },
+        { success: false, error: "Failed to check existing property", details: errNormalized.message },
         { status: 500 }
       );
+    }
+    if (byNormalized) {
+      existingProperty = byNormalized as Property;
+    } else if (url !== normalizedUrl) {
+      const { data: byOriginal, error: errOriginal } = await supabase
+        .from("properties")
+        .select("*")
+        .eq("url", url)
+        .maybeSingle();
+      if (errOriginal) {
+        console.error("[Analyze] Error checking existing property (original url):", errOriginal);
+        return NextResponse.json(
+          { success: false, error: "Failed to check existing property", details: errOriginal.message },
+          { status: 500 }
+        );
+      }
+      existingProperty = (byOriginal as Property) ?? null;
     }
 
     let property: Property;
     let propertyId: string | undefined = existingProperty?.id;
+    let propertyDataUnavailable = false;
 
     // 既存データがあっても、主要な情報が不足している場合は再スクレイピング
     const shouldRescrape = !existingProperty || 
@@ -302,7 +333,13 @@ export async function POST(request: Request) {
       !existingProperty.address || 
       !existingProperty.floor_plan;
 
-    // 常にHTMLを取得して保存（デバッグと再パースのため）
+    if (existingProperty && !shouldRescrape) {
+      // 既存データが十分な場合はHTML取得をスキップし、DBのデータをそのまま使う
+      property = existingProperty as Property;
+      propertyId = property.id;
+      console.log("[Analyze] Using existing property (data complete), skipping HTML fetch:", propertyId);
+    } else {
+    // HTMLを取得して保存（新規 or データ不足時のみ）
     console.log("[Analyze] ========================================");
     console.log("[Analyze] Step 1: Fetching HTML from URL:", url);
     console.log("[Analyze] ========================================");
@@ -369,7 +406,6 @@ export async function POST(request: Request) {
       !!(p?.title || p?.address || p?.floor_plan);
     const blocked =
       !htmlContent || isBlockedOrRedirectPage(htmlContent);
-    let propertyDataUnavailable = false;
 
     if (blocked && existingProperty) {
       // 認証中・リダイレクト等で物件HTMLが取れないが、同URLの既存データあり → 使い回す（上書きしない）
@@ -388,7 +424,7 @@ export async function POST(request: Request) {
         : "unknown";
       const { data: minimalProperty, error: minimalErr } = await supabase
         .from("properties")
-        .insert({ url, source })
+        .insert({ url: normalizedUrl, source })
         .select()
         .single();
       if (minimalErr || !minimalProperty) {
@@ -468,6 +504,8 @@ export async function POST(request: Request) {
           building_coverage_ratio: null,
           land_category: null,
           zoning: null,
+          urban_planning: null,
+          land_rights: null,
           transportation: [],
           yield_rate: null,
           raw_data: { url, scrape_error: scrapeError.message },
@@ -487,10 +525,11 @@ export async function POST(request: Request) {
       let insertError;
       
       if (existingProperty) {
-        // 既存データを更新
+        // 既存データを更新（url を正規化して保存し、次回から正規化URLでヒットするようにする）
         const { data, error } = await supabase
           .from("properties")
           .update({
+            url: normalizedUrl,
             source,
             title: scrapedData.title,
             price: scrapedData.price,
@@ -515,6 +554,8 @@ export async function POST(request: Request) {
             building_coverage_ratio: scrapedData.building_coverage_ratio,
             land_category: scrapedData.land_category,
             zoning: scrapedData.zoning,
+            urban_planning: scrapedData.urban_planning,
+            land_rights: scrapedData.land_rights,
             transportation: scrapedData.transportation.length > 0 && 
                             scrapedData.transportation.every(t => 
                               t.line && 
@@ -538,7 +579,7 @@ export async function POST(request: Request) {
         const { data, error } = await supabase
           .from("properties")
           .insert({
-            url,
+            url: normalizedUrl,
             source,
             title: scrapedData.title,
             price: scrapedData.price,
@@ -563,6 +604,8 @@ export async function POST(request: Request) {
             building_coverage_ratio: scrapedData.building_coverage_ratio,
             land_category: scrapedData.land_category,
             zoning: scrapedData.zoning,
+            urban_planning: scrapedData.urban_planning,
+            land_rights: scrapedData.land_rights,
             transportation: scrapedData.transportation.length > 0 && 
                             scrapedData.transportation.every(t => 
                               t.line && 
@@ -609,6 +652,28 @@ export async function POST(request: Request) {
       propertyId = property.id;
       console.log("[Analyze] Property saved successfully:", propertyId);
     }
+    }
+
+    // 住所が取得できていれば外部環境リサーチを非同期で開始（レスポンスは待たない）
+    if (property?.address?.trim() && propertyId) {
+      let base: string | null = null;
+      try {
+        if (typeof process.env.VERCEL_URL !== "undefined") {
+          base = `https://${process.env.VERCEL_URL}`;
+        } else if (process.env.NEXT_PUBLIC_APP_URL) {
+          base = process.env.NEXT_PUBLIC_APP_URL;
+        } else {
+          base = new URL(request.url).origin;
+        }
+      } catch (_) {}
+      if (base) {
+        const refreshUrl = `${base}/api/property/${propertyId}/external-env/refresh`;
+        fetch(refreshUrl, { method: "POST" }).catch((e) =>
+          console.warn("[Analyze] External env refresh trigger failed:", e?.message)
+        );
+        console.log("[Analyze] Triggered external env research:", refreshUrl);
+      }
+    }
 
     // Gemini APIで投資判断を生成
     const propertyInfo = [
@@ -619,8 +684,14 @@ export async function POST(request: Request) {
       property.price_per_sqm ? `平米単価: ${property.price_per_sqm.toLocaleString()}円/㎡` : null,
       property.address ? `所在地: ${property.address}` : null,
       property.floor_plan ? `間取り: ${property.floor_plan}` : null,
-      property.year_built !== null ? `築年数: ${property.year_built}年` : null,
-      property.year_built_month ? `築年月: ${property.year_built_month}月` : null,
+      (() => {
+        const { ageYears, dateStr } = getBuiltYearInfo(property.year_built, property.year_built_month);
+        if (ageYears == null) return null;
+        return `築年数: ${ageYears}年`;
+      })(),
+      property.year_built != null
+        ? `築年月: ${getBuiltYearInfo(property.year_built, property.year_built_month).dateStr}`
+        : null,
       property.building_area ? `建物面積: ${property.building_area}㎡` : null,
       property.land_area ? `土地面積: ${property.land_area}㎡` : null,
       property.building_floors ? `階建: ${property.building_floors}` : null,
@@ -632,6 +703,8 @@ export async function POST(request: Request) {
       property.building_coverage_ratio ? `建ぺい率: ${property.building_coverage_ratio}%` : null,
       property.land_category ? `地目: ${property.land_category}` : null,
       property.zoning ? `用途地域: ${property.zoning}` : null,
+      property.urban_planning ? `都市計画: ${property.urban_planning}` : null,
+      property.land_rights ? `土地権利: ${property.land_rights}` : null,
       property.yield_rate ? `利回り: ${property.yield_rate}%` : null,
       property.transportation && property.transportation.length > 0
         ? `交通詳細:\n${property.transportation.map((t) => `  - ${t.line} ${t.station} 徒歩${t.walk}分`).join("\n")}`
@@ -734,15 +807,44 @@ ${propertyInfo}
       };
     };
 
-    console.log("[Analyze] Generating investment analysis...");
-    let analysisText: string | null = null;
-    let retries = 0;
-    const maxRetries = 3;
-    let currentPrompt = analysisPrompt;
-    let lastError: Error | null = null;
+    // 既存の投資判断をチェック（propertyId が確定している場合のみ）
+    let existingAnalysis: PropertyAnalysis | null = null;
+    if (propertyId) {
+      const { data: analysisData, error: analysisError } = await supabase
+        .from("property_analyses")
+        .select("*")
+        .eq("property_id", propertyId)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      
+      if (!analysisError && analysisData) {
+        existingAnalysis = analysisData as PropertyAnalysis;
+        console.log("[Analyze] Found existing analysis, skipping Gemini generation:", existingAnalysis.id);
+      }
+    }
 
-    // リトライロジック付きで生成
-    do {
+    let analysisText: string | null = null;
+    
+    if (existingAnalysis) {
+      // 既存の分析結果を使用
+      analysisText = (existingAnalysis.analysis_result as any)?.full_analysis || existingAnalysis.summary || null;
+      if (!analysisText) {
+        console.warn("[Analyze] Existing analysis found but no full_analysis text, falling back to Gemini generation");
+        existingAnalysis = null; // フォールバック
+      }
+    }
+
+    if (!existingAnalysis) {
+      // 既存の分析結果がない場合のみ Gemini で生成
+      console.log("[Analyze] Generating investment analysis...");
+      let retries = 0;
+      const maxRetries = 3;
+      let currentPrompt = analysisPrompt;
+      let lastError: Error | null = null;
+
+      // リトライロジック付きで生成
+      do {
       try {
         console.log(`[Analyze] Attempting to generate analysis (attempt ${retries + 1}/${maxRetries})...`);
         analysisText = await generateTextWithGemini(currentPrompt);
@@ -815,29 +917,30 @@ ${propertyInfo}
       }
     } while (retries < maxRetries);
 
-    // analysisTextが未定義の場合はエラー
-    if (!analysisText || analysisText.trim().length === 0) {
-      console.error("[Analyze] Analysis text is null or empty after all retries");
-      console.error("[Analyze] Last error:", lastError);
-      return NextResponse.json(
-        {
-          success: false,
-          error: "Failed to generate analysis with Gemini API",
-          details: lastError?.message || "Analysis text is null or empty after retries. Please check server logs for details.",
-        },
-        { status: 500 }
-      );
-    }
+      // analysisTextが未定義の場合はエラー
+      if (!analysisText || analysisText.trim().length === 0) {
+        console.error("[Analyze] Analysis text is null or empty after all retries");
+        console.error("[Analyze] Last error:", lastError);
+        return NextResponse.json(
+          {
+            success: false,
+            error: "Failed to generate analysis with Gemini API",
+            details: lastError?.message || "Analysis text is null or empty after retries. Please check server logs for details.",
+          },
+          { status: 500 }
+        );
+      }
 
-    // 最終検証
-    const finalValidation = validateAnalysisFormat(analysisText);
-    if (!finalValidation.valid) {
-      console.warn(
-        `[Analyze] Final validation failed after ${maxRetries} retries. Missing: ${finalValidation.missing.join(
-          ", "
-        )}`
-      );
-      // 検証に失敗しても処理は続行（パーサーが柔軟に対応）
+      // 最終検証（既存の分析結果を使う場合はスキップ）
+      const finalValidation = validateAnalysisFormat(analysisText);
+      if (!finalValidation.valid) {
+        console.warn(
+          `[Analyze] Final validation failed after ${maxRetries} retries. Missing: ${finalValidation.missing.join(
+            ", "
+          )}`
+        );
+        // 検証に失敗しても処理は続行（パーサーが柔軟に対応）
+      }
     }
 
     // 新しいフォーマットで分析結果をパース
@@ -857,16 +960,16 @@ ${propertyInfo}
       const recommendationMatch = text.match(/推奨度:\s*(buy|hold|avoid)/i) ||
                                  text.match(/推奨[：:]\s*(buy|hold|avoid)/i);
 
-      // 物件概要の評価（複数のパターンに対応）
-      const locationMatch = text.match(/立地[（(]★[1-5]で評価[）)]:\s*([^\n]+)/) ||
-                           text.match(/立地:\s*([^\n]+)/) ||
-                           text.match(/立地評価:\s*([^\n]+)/);
-      const priceMatch = text.match(/価格[（(]★[1-5]で評価[）)]:\s*([^\n]+)/) ||
-                        text.match(/価格:\s*([^\n]+)/) ||
-                        text.match(/価格評価:\s*([^\n]+)/);
-      const buildingMatch = text.match(/建物[（(]★[1-5]で評価[）)]:\s*([^\n]+)/) ||
-                           text.match(/建物:\s*([^\n]+)/) ||
-                           text.match(/建物評価:\s*([^\n]+)/);
+      // 物件概要の評価（複数行のコメントに対応：次の「価格」「建物」「##」の手前まで取得）
+      const locationMatch = text.match(/立地[（(]★[1-5]で評価[）)]:\s*([\s\S]+?)(?=\n\s*(?:価格|建物|##)|$)/) ||
+                           text.match(/立地:\s*([\s\S]+?)(?=\n\s*(?:価格|建物|##)|$)/) ||
+                           text.match(/立地評価:\s*([\s\S]+?)(?=\n\s*(?:価格|建物|##)|$)/);
+      const priceMatch = text.match(/価格[（(]★[1-5]で評価[）)]:\s*([\s\S]+?)(?=\n\s*(?:建物|##)|$)/) ||
+                        text.match(/価格:\s*([\s\S]+?)(?=\n\s*(?:建物|##)|$)/) ||
+                        text.match(/価格評価:\s*([\s\S]+?)(?=\n\s*(?:建物|##)|$)/);
+      const buildingMatch = text.match(/建物[（(]★[1-5]で評価[）)]:\s*([\s\S]+?)(?=\n\s*##|$)/) ||
+                           text.match(/建物:\s*([\s\S]+?)(?=\n\s*##|$)/) ||
+                           text.match(/建物評価:\s*([\s\S]+?)(?=\n\s*##|$)/);
 
       // ★の数を抽出
       const getStarCount = (text: string): number => {
@@ -946,19 +1049,19 @@ ${propertyInfo}
             score: locationScoreMatch ? parseInt(locationScoreMatch[1], 10) : getStarCount(locationMatch?.[1] || ""),
             max_score: 5,
             stars: "★".repeat(locationScoreMatch ? parseInt(locationScoreMatch[1], 10) : getStarCount(locationMatch?.[1] || "")),
-            comment: locationMatch?.[1]?.replace(/★+/g, "").trim() || "",
+            comment: (locationMatch?.[1]?.replace(/★+/g, "").replace(/\n+/g, " ").replace(/\s+/g, " ").trim()) || "",
           },
           price: {
             score: priceScoreMatch ? parseInt(priceScoreMatch[1], 10) : getStarCount(priceMatch?.[1] || ""),
             max_score: 5,
             stars: "★".repeat(priceScoreMatch ? parseInt(priceScoreMatch[1], 10) : getStarCount(priceMatch?.[1] || "")),
-            comment: priceMatch?.[1]?.replace(/★+/g, "").trim() || "",
+            comment: (priceMatch?.[1]?.replace(/★+/g, "").replace(/\n+/g, " ").replace(/\s+/g, " ").trim()) || "",
           },
           building: {
             score: buildingScoreMatch ? parseInt(buildingScoreMatch[1], 10) : getStarCount(buildingMatch?.[1] || ""),
             max_score: 5,
             stars: "★".repeat(buildingScoreMatch ? parseInt(buildingScoreMatch[1], 10) : getStarCount(buildingMatch?.[1] || "")),
-            comment: buildingMatch?.[1]?.replace(/★+/g, "").trim() || "",
+            comment: (buildingMatch?.[1]?.replace(/★+/g, "").replace(/\n+/g, " ").replace(/\s+/g, " ").trim()) || "",
           },
         },
         investment_simulation: {
@@ -987,39 +1090,72 @@ ${propertyInfo}
       };
     };
 
-    const structuredAnalysis = parseAnalysis(analysisText);
+    // 既存の分析結果を使う場合は、既存のデータから直接取得
+    let structuredAnalysis: any;
+    let recommendation: "buy" | "hold" | "avoid" | null = null;
+    let score: number | null = null;
+    let yieldScore: number | null = null;
+    let sectionScores: any;
+    let summary: string;
+    let analysisResult: any;
 
-    // 全体スコアと推奨度を抽出
-    const overallScoreMatch = analysisText.match(/全体の投資スコア:\s*(\d+)/);
-    const recommendationMatch = analysisText.match(/推奨度:\s*(buy|hold|avoid)/i);
-    const yieldScoreMatch = analysisText.match(/収益性スコア:\s*(\d+)/);
+    if (existingAnalysis) {
+      // 既存の分析結果から直接取得
+      const existingResult = existingAnalysis.analysis_result as any;
+      structuredAnalysis = existingResult?.structured || existingAnalysis.structured_analysis;
+      recommendation = existingAnalysis.recommendation as "buy" | "hold" | "avoid" | null;
+      score = existingAnalysis.score;
+      sectionScores = existingAnalysis.section_scores || {
+        location: structuredAnalysis?.property_overview?.location?.score || 0,
+        price: structuredAnalysis?.property_overview?.price?.score || 0,
+        building: structuredAnalysis?.property_overview?.building?.score || 0,
+        yield: 0,
+        overall: score || 0,
+      };
+      summary = existingAnalysis.summary || existingResult?.summary || analysisText.substring(0, 500);
+      analysisResult = existingResult || {
+        summary,
+        recommendation: recommendation || undefined,
+        score: score || undefined,
+        full_analysis: analysisText,
+        structured: structuredAnalysis,
+      };
+    } else {
+      // 新規生成の場合はパース処理を実行
+      structuredAnalysis = parseAnalysis(analysisText);
 
-    const recommendation = recommendationMatch
-      ? (recommendationMatch[1].toLowerCase() as "buy" | "hold" | "avoid")
-      : null;
-    const score = overallScoreMatch ? parseInt(overallScoreMatch[1], 10) : null;
-    const yieldScore = yieldScoreMatch ? parseInt(yieldScoreMatch[1], 10) : null;
+      // 全体スコアと推奨度を抽出
+      const overallScoreMatch = analysisText.match(/全体の投資スコア:\s*(\d+)/);
+      const recommendationMatch = analysisText.match(/推奨度:\s*(buy|hold|avoid)/i);
+      const yieldScoreMatch = analysisText.match(/収益性スコア:\s*(\d+)/);
 
-    // セクションスコアを抽出
-    const sectionScores = {
-      location: structuredAnalysis.property_overview.location.score,
-      price: structuredAnalysis.property_overview.price.score,
-      building: structuredAnalysis.property_overview.building.score,
-      yield: yieldScore || 0,
-      overall: score || 0,
-    };
+      recommendation = recommendationMatch
+        ? (recommendationMatch[1].toLowerCase() as "buy" | "hold" | "avoid")
+        : null;
+      score = overallScoreMatch ? parseInt(overallScoreMatch[1], 10) : null;
+      yieldScore = yieldScoreMatch ? parseInt(yieldScoreMatch[1], 10) : null;
 
-    // サマリー（最初の段落を取得）
-    const summary = structuredAnalysis.advice || analysisText.substring(0, 500);
+      // セクションスコアを抽出
+      sectionScores = {
+        location: structuredAnalysis.property_overview.location.score,
+        price: structuredAnalysis.property_overview.price.score,
+        building: structuredAnalysis.property_overview.building.score,
+        yield: yieldScore || 0,
+        overall: score || 0,
+      };
 
-    // 分析結果を構造化
-    const analysisResult = {
-      summary: summary,
-      recommendation: recommendation || undefined,
-      score: score || undefined,
-      full_analysis: analysisText,
-      structured: structuredAnalysis,
-    };
+      // サマリー（最初の段落を取得）
+      summary = structuredAnalysis.advice || analysisText.substring(0, 500);
+
+      // 分析結果を構造化
+      analysisResult = {
+        summary: summary,
+        recommendation: recommendation || undefined,
+        score: score || undefined,
+        full_analysis: analysisText,
+        structured: structuredAnalysis,
+      };
+    }
 
     // 投資判断結果をデータベースに保存
     // ユーザーメッセージを保存（会話IDがなくても保存）
@@ -1059,28 +1195,34 @@ ${propertyInfo}
       });
     }
 
-    // 投資判断を保存
-    const { data: analysis, error: analysisError } = await supabase
-      .from("property_analyses")
-      .insert({
-        property_id: propertyId,
-        conversation_id: currentConversationId || null,
-        message_id: userMessageId || null,
-        analysis_result: analysisResult,
-        summary,
-        recommendation,
-        score,
-        section_scores: sectionScores,
-        structured_analysis: structuredAnalysis,
-      })
-      .select()
-      .single();
+    // 投資判断を保存（既存の分析結果を使う場合は新規作成しない）
+    let analysis = existingAnalysis;
+    if (!existingAnalysis) {
+      const { data: newAnalysis, error: analysisError } = await supabase
+        .from("property_analyses")
+        .insert({
+          property_id: propertyId,
+          conversation_id: currentConversationId || null,
+          message_id: userMessageId || null,
+          analysis_result: analysisResult,
+          summary,
+          recommendation,
+          score,
+          section_scores: sectionScores,
+          structured_analysis: structuredAnalysis,
+        })
+        .select()
+        .single();
 
-    if (analysisError) {
-      console.error("[Analyze] Error saving analysis:", analysisError);
-      // 分析結果は保存できなくても、レスポンスは返す
+      if (analysisError) {
+        console.error("[Analyze] Error saving analysis:", analysisError);
+        // 分析結果は保存できなくても、レスポンスは返す
+      } else {
+        analysis = newAnalysis as PropertyAnalysis;
+        console.log("[Analyze] Analysis saved:", analysis.id);
+      }
     } else {
-      console.log("[Analyze] Analysis saved:", analysis.id);
+      console.log("[Analyze] Using existing analysis, skipping save:", analysis.id);
     }
 
     // アシスタントメッセージを保存（会話IDがなくても保存）
@@ -1173,14 +1315,20 @@ ${propertyInfo}
         building_coverage_ratio: property.building_coverage_ratio,
         land_category: property.land_category,
         zoning: property.zoning,
+        urban_planning: property.urban_planning,
+        land_rights: property.land_rights,
         transportation: property.transportation,
         yield_rate: property.yield_rate,
       },
       analysis: {
+        id: analysis?.id || null,
         summary,
         recommendation,
         score,
         full_analysis: analysisText,
+        structured_analysis: structuredAnalysis,
+        section_scores: sectionScores,
+        investment_purpose: analysis?.investment_purpose || null,
       },
       analysisId: analysis?.id || null,
     });
