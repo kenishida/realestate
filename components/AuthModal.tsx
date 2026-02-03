@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useAuth } from "@/lib/auth-context";
+import { createClientSupabase } from "@/lib/supabase";
 
 type Mode = "login" | "signup";
 
@@ -35,6 +36,26 @@ export default function AuthModal({ isOpen, onClose, onSuccess, message }: AuthM
     onClose();
   };
 
+  /** 未ログインで開始した会話をログイン中のユーザーに紐づける（API は Bearer トークンでユーザーを特定する） */
+  const claimCurrentConversation = async (accessToken: string) => {
+    if (typeof window === "undefined") return;
+    const conversationId = localStorage.getItem("currentConversationId");
+    if (!conversationId) return;
+    try {
+      await fetch("/api/conversations/claim", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({ conversationId }),
+        credentials: "include",
+      });
+    } catch {
+      // 失敗してもモーダルは閉じる（会話は未紐づけのまま）
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -48,6 +69,8 @@ export default function AuthModal({ isOpen, onClose, onSuccess, message }: AuthM
           setError(err.message || "ログインに失敗しました");
           return;
         }
+        const { data: { session } } = await createClientSupabase().auth.getSession();
+        if (session?.access_token) await claimCurrentConversation(session.access_token);
         onSuccess?.();
         handleClose();
       } else {
@@ -57,7 +80,8 @@ export default function AuthModal({ isOpen, onClose, onSuccess, message }: AuthM
           return;
         }
         // Confirm email がオフの場合は session が返りその場でログイン済み
-        if (session) {
+        if (session?.access_token) {
+          await claimCurrentConversation(session.access_token);
           onSuccess?.();
           handleClose();
         } else {

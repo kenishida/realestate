@@ -1,16 +1,16 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import ChatInput from "@/components/ChatInput";
 import ChatMessage from "@/components/ChatMessage";
 import PropertyDetails from "@/components/PropertyDetails";
-import PropertySidebar from "@/components/PropertySidebar";
+import AppVerticalSidebar from "@/components/AppVerticalSidebar";
 import InvestmentAnalysis from "@/components/InvestmentAnalysis";
 import ExternalEnvironment from "@/components/ExternalEnvironment";
 import AuthModal from "@/components/AuthModal";
 import { useAuth } from "@/lib/auth-context";
-import { Property } from "@/lib/types";
+import { createClientSupabase } from "@/lib/supabase";
 
 interface Message {
   id: string;
@@ -20,7 +20,7 @@ interface Message {
 }
 
 export default function Home() {
-  const { user, signOut, isLoading: authLoading } = useAuth();
+  const { user, session, signOut, isLoading: authLoading } = useAuth();
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [authModalMessage, setAuthModalMessage] = useState<string | undefined>(undefined);
   const [messages, setMessages] = useState<Message[]>([
@@ -33,10 +33,27 @@ export default function Home() {
   ]);
   const [isLoading, setIsLoading] = useState(false);
   const [propertyData, setPropertyData] = useState<any>(null);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<"property" | "environment" | "analysis">("property");
   const [waitingForPurpose, setWaitingForPurpose] = useState(false);
   const [currentAnalysisId, setCurrentAnalysisId] = useState<string | null>(null);
+
+  // トップ（ホーム）は「新規会話の入り口」。古い currentConversationId が残っていると
+  // 次の物件URLが古い会話に紐づいてしまうため、表示時にクリアしてメッセージも初期化する。
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    localStorage.removeItem("currentConversationId");
+    setMessages([
+      {
+        id: "1",
+        role: "assistant",
+        content: "こんにちは！物件価値わかるくんです。\n物件URLを入力していただければ、投資判断を行います。",
+        timestamp: new Date(),
+      },
+    ]);
+    setPropertyData(null);
+    setCurrentAnalysisId(null);
+    setWaitingForPurpose(false);
+  }, []);
 
   const handleSendMessage = async (content: string) => {
     // ユーザーメッセージを追加
@@ -62,18 +79,24 @@ export default function Home() {
       }
 
       if (isUrl) {
-        // 物件URLの場合、投資判断を生成
-        // localStorageから既存のconversationIdを取得
-        const existingConversationId = localStorage.getItem("currentConversationId");
-        
+        // ホーム（/）では常に新規会話として扱う。ログイン中なら Bearer を送り、新規会話をそのユーザーに紐づける。
+        let token = session?.access_token;
+        if (user?.id && !token) {
+          const { data: { session: s } } = await createClientSupabase().auth.getSession();
+          token = s?.access_token ?? undefined;
+        }
+        const headers: Record<string, string> = {
+          "Content-Type": "application/json",
+        };
+        if (token) {
+          headers.Authorization = `Bearer ${token}`;
+        }
         const response = await fetch("/api/analyze", {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ 
+          headers,
+          body: JSON.stringify({
             url: content,
-            conversationId: existingConversationId || undefined,
+            conversationId: undefined,
           }),
         });
 
@@ -319,115 +342,18 @@ export default function Home() {
     }
   };
 
-  const handleSelectProperty = async (property: Property) => {
-    console.log("Selected property:", property);
-    setIsSidebarOpen(false);
-    
-    // 既存の動作（物件詳細を表示）
-    setIsLoading(true);
-
-    try {
-      // 物件情報、会話履歴、投資判断を取得
-      const response = await fetch(`/api/property/${property.id}`);
-      
-      if (!response.ok) {
-        throw new Error("Failed to fetch property data");
-      }
-
-      const data = await response.json();
-
-      if (data.success) {
-        console.log("[Property Select] Received data:", {
-          property: data.property?.title,
-          messagesCount: data.messages?.length || 0,
-          analysis: !!data.analysis,
-        });
-        console.log("[Property Select] Messages:", data.messages);
-
-        // 物件情報を右側に表示
-        setPropertyData({
-          property: data.property,
-          analysis: data.analysis,
-          propertyDataUnavailable: data.propertyDataUnavailable ?? false,
-        });
-        
-        // タブを「物件情報」にリセット
-        setActiveTab("property");
-
-        // メッセージ履歴を表示
-        if (data.messages && data.messages.length > 0) {
-          const messageHistory: Message[] = data.messages.map((msg: any) => ({
-            id: msg.id,
-            role: msg.role as "user" | "assistant" | "system",
-            content: msg.content,
-            timestamp: new Date(msg.created_at),
-          }));
-          setMessages(messageHistory);
-        } else {
-          // メッセージがない場合は初期メッセージを表示
-          setMessages([
-            {
-              id: "1",
-              role: "assistant",
-              content: `物件「${data.property.title || data.property.address || "物件"}」の情報を表示しています。\n\n右側に物件詳細と投資判断を表示しています。`,
-              timestamp: new Date(),
-            },
-          ]);
-        }
-      } else {
-        throw new Error(data.error || "Unknown error");
-      }
-    } catch (error: any) {
-      console.error("Error loading property:", error);
-      const errorMessage: Message = {
-        id: Date.now().toString(),
-        role: "assistant",
-        content: `エラーが発生しました: ${error.message || "不明なエラー"}`,
-        timestamp: new Date(),
-      };
-      setMessages((prev) => [...prev, errorMessage]);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
   return (
     <div className="flex h-screen bg-gray-50">
-      {/* サイドバー */}
-      <PropertySidebar
-        isOpen={isSidebarOpen}
-        onClose={() => setIsSidebarOpen(false)}
-        onSelectProperty={handleSelectProperty}
-      />
+      {/* 縦長ナビゲーション（ホバーでテキスト表示） */}
+      <AppVerticalSidebar />
 
       {/* 左側: チャットUI */}
       <div className="flex w-1/2 flex-col border-r border-gray-200 bg-white md:w-1/3">
-        {/* ヘッダー（左: メニュー + タイトル） */}
-        <header className="flex shrink-0 h-16 items-center justify-between border-b border-gray-200 bg-white px-6">
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => setIsSidebarOpen(true)}
-              className="rounded-lg p-2 text-gray-600 hover:bg-gray-100 hover:text-gray-900"
-              aria-label="メニューを開く"
-            >
-              <svg
-                className="h-6 w-6"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M4 6h16M4 12h16M4 18h16"
-                />
-              </svg>
-            </button>
-            <Link href="/" className="text-xl font-bold text-gray-900 hover:opacity-80">
-              物件価値わかるくん
-            </Link>
-          </div>
+        {/* ヘッダー（左: タイトルのみ） */}
+        <header className="flex shrink-0 h-16 items-center border-b border-gray-200 bg-white px-6">
+          <Link href="/" className="text-xl font-bold text-gray-900 hover:opacity-80">
+            物件価値わかるくん
+          </Link>
         </header>
 
         {/* メッセージ一覧 */}
@@ -525,7 +451,7 @@ export default function Home() {
                       : "bg-gray-100 text-gray-600 shadow-[inset_0_2px_4px_rgba(0,0,0,0.1)] hover:bg-gray-200"
                   }`}
                 >
-                  外部環境あ
+                  外部環境
                 </button>
                 <button
                   onClick={() => {

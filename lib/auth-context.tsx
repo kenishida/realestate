@@ -40,6 +40,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => subscription.unsubscribe();
   }, []);
 
+  // ログイン済みになったとき、未紐づけの会話（localStorage の currentConversationId）を自分に claim する
+  useEffect(() => {
+    if (!user || !session?.access_token || typeof window === "undefined") return;
+    const conversationId = localStorage.getItem("currentConversationId");
+    if (!conversationId) return;
+    fetch("/api/conversations/claim", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({ conversationId }),
+      credentials: "include",
+    }).catch(() => {});
+  }, [user?.id, session?.access_token]);
+
   const signIn = async (email: string, password: string) => {
     const supabase = createClientSupabase();
     const { error } = await supabase.auth.signInWithPassword({ email, password });

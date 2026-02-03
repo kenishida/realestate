@@ -7,7 +7,7 @@ import ChatInput from "@/components/ChatInput";
 import ChatMessage from "@/components/ChatMessage";
 import PropertyDetails from "@/components/PropertyDetails";
 import ExternalEnvironment from "@/components/ExternalEnvironment";
-import PropertySidebar from "@/components/PropertySidebar";
+import AppVerticalSidebar from "@/components/AppVerticalSidebar";
 import InvestmentAnalysis from "@/components/InvestmentAnalysis";
 import { Property } from "@/lib/types";
 
@@ -28,7 +28,6 @@ export default function ChatPage() {
   const [propertyData, setPropertyData] = useState<any>(null);
   const [propertyList, setPropertyList] = useState<Property[]>([]);
   const [selectedPropertyId, setSelectedPropertyId] = useState<string | null>(null);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<"property" | "environment" | "analysis">("property");
   const [waitingForPurpose, setWaitingForPurpose] = useState(false);
   const [currentAnalysisId, setCurrentAnalysisId] = useState<string | null>(null);
@@ -433,97 +432,14 @@ export default function ChatPage() {
     }
   };
 
-  const handleSelectProperty = async (property: Property) => {
-    console.log("Selected property:", property);
-    setIsSidebarOpen(false);
-    
-    // 物件を選択した場合は、その物件に関連するチャット履歴を取得して表示
-    // ここでは既存の動作を維持
-    setIsLoading(true);
-    try {
-      const response = await fetch(`/api/property/${property.id}`);
-      
-      if (!response.ok) {
-        throw new Error("Failed to fetch property data");
-      }
-
-      const data = await response.json();
-
-      if (data.success) {
-        setPropertyData({
-          property: data.property,
-          analysis: data.analysis,
-          propertyDataUnavailable: data.propertyDataUnavailable ?? false,
-        });
-        setActiveTab("property");
-
-        if (data.messages && data.messages.length > 0) {
-          const messageHistory: Message[] = data.messages.map((msg: any) => ({
-            id: msg.id,
-            role: msg.role as "user" | "assistant" | "system",
-            content: msg.content,
-            timestamp: new Date(msg.created_at),
-          }));
-          setMessages(messageHistory);
-        } else {
-          setMessages([
-            {
-              id: "1",
-              role: "assistant",
-              content: `物件「${data.property.title || data.property.address || "物件"}」の情報を表示しています。\n\n右側に物件詳細と投資判断を表示しています。`,
-              timestamp: new Date(),
-            },
-          ]);
-        }
-      } else {
-        throw new Error(data.error || "Unknown error");
-      }
-    } catch (error: any) {
-      console.error("Error loading property:", error);
-      const errorMessage: Message = {
-        id: Date.now().toString(),
-        role: "assistant",
-        content: `エラーが発生しました: ${error.message || "不明なエラー"}`,
-        timestamp: new Date(),
-      };
-      setMessages((prev) => [...prev, errorMessage]);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
   return (
     <div className="flex h-screen bg-gray-50">
-      {/* サイドバー */}
-      <PropertySidebar
-        isOpen={isSidebarOpen}
-        onClose={() => setIsSidebarOpen(false)}
-        onSelectProperty={handleSelectProperty}
-      />
+      <AppVerticalSidebar />
 
       {/* 左側: チャットUI */}
       <div className="flex w-1/2 flex-col border-r border-gray-200 bg-white md:w-1/3">
         {/* ヘッダー */}
         <div className="flex items-center border-b border-gray-200 bg-white px-6 py-4">
-          <button
-            onClick={() => setIsSidebarOpen(true)}
-            className="mr-3 rounded-lg p-2 text-gray-600 hover:bg-gray-100 hover:text-gray-900"
-            aria-label="メニューを開く"
-          >
-            <svg
-              className="h-6 w-6"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M4 6h16M4 12h16M4 18h16"
-              />
-            </svg>
-          </button>
           <div>
             <Link href="/" className="block">
               <h1 className="text-xl font-bold text-gray-900 hover:opacity-80">物件価値わかるくん</h1>

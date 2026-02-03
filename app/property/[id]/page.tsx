@@ -6,7 +6,7 @@ import { useParams } from "next/navigation";
 import ChatInput from "@/components/ChatInput";
 import ChatMessage from "@/components/ChatMessage";
 import PropertyDetails from "@/components/PropertyDetails";
-import PropertySidebar from "@/components/PropertySidebar";
+import AppVerticalSidebar from "@/components/AppVerticalSidebar";
 import InvestmentAnalysis from "@/components/InvestmentAnalysis";
 import ExternalEnvironment from "@/components/ExternalEnvironment";
 import AuthModal from "@/components/AuthModal";
@@ -78,7 +78,6 @@ export default function PropertyPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [propertyData, setPropertyData] = useState<any>(null);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<"property" | "environment" | "analysis">("property");
   const [waitingForPurpose, setWaitingForPurpose] = useState(false);
   const [currentAnalysisId, setCurrentAnalysisId] = useState<string | null>(null);
@@ -358,13 +357,6 @@ export default function PropertyPage() {
     }
   };
 
-  const handleSelectProperty = (property: { id: string }) => {
-    setIsSidebarOpen(false);
-    if (property.id !== id) {
-      window.location.href = `/property/${property.id}`;
-    }
-  };
-
   if (!id) {
     return (
       <div className="flex h-screen items-center justify-center bg-gray-50">
@@ -375,23 +367,10 @@ export default function PropertyPage() {
 
   return (
     <div className="flex h-screen bg-gray-50">
-      <PropertySidebar
-        isOpen={isSidebarOpen}
-        onClose={() => setIsSidebarOpen(false)}
-        onSelectProperty={handleSelectProperty}
-      />
+      <AppVerticalSidebar />
 
       <div className="flex w-1/2 flex-col border-r border-gray-200 bg-white md:w-1/3">
         <div className="flex items-center border-b border-gray-200 bg-white px-6 py-4">
-          <button
-            onClick={() => setIsSidebarOpen(true)}
-            className="mr-3 rounded-lg p-2 text-gray-600 hover:bg-gray-100 hover:text-gray-900"
-            aria-label="メニューを開く"
-          >
-            <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-            </svg>
-          </button>
           <div>
             <Link href="/" className="block">
               <h1 className="text-xl font-bold text-gray-900 hover:opacity-80">物件価値わかるくん</h1>

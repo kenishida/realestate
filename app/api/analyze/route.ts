@@ -1,9 +1,13 @@
 import { NextResponse } from "next/server";
-import { getSupabaseForApi } from "@/lib/supabase-server";
+import { createClient } from "@supabase/supabase-js";
+import { getSupabaseForApi, createServiceRoleSupabase } from "@/lib/supabase-server";
 import { generateTextWithGemini } from "@/lib/gemini";
 import { scrapePropertyData, fetchPropertyHTML, isBlockedOrRedirectPage } from "@/lib/property-scraper";
 import type { Property, PropertyAnalysis } from "@/lib/types";
 import { randomBytes } from "crypto";
+
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
 
 /**
  * ランダムなURLパスを生成する関数
@@ -45,12 +49,23 @@ export async function POST(request: Request) {
   try {
     const body = await request.json();
     const { url, conversationId } = body;
+
+    // ログイン中なら Bearer でユーザーを取得（新規会話をそのユーザーに紐づけるため）
+    let requestUserId: string | null = null;
+    const authHeader = request.headers.get("Authorization");
+    const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7).trim() : null;
+    if (token && supabaseUrl && supabaseAnonKey) {
+      const authClient = createClient(supabaseUrl, supabaseAnonKey);
+      const { data: { user } } = await authClient.auth.getUser(token);
+      if (user?.id) requestUserId = user.id;
+    }
     
     console.log("[Analyze] ========================================");
     console.log("[Analyze] Received request:", { 
       url, 
       hasConversationId: !!conversationId,
       conversationId: conversationId || "none",
+      hasRequestUser: !!requestUserId,
     });
     console.log("[Analyze] ========================================");
 
@@ -111,17 +126,25 @@ export async function POST(request: Request) {
         pathAttempts++;
       }
       
-      // 会話作成をリトライ（最大3回）
+      // 会話作成をリトライ（最大3回）。user_id を設定する場合は RLS を避けるためサービスロールを使用
       let createAttempts = 0;
       const maxCreateAttempts = 3;
       let conversationCreated = false;
-      
+      let insertClient = supabase;
+      if (requestUserId) {
+        try {
+          insertClient = createServiceRoleSupabase();
+        } catch {
+          insertClient = supabase;
+        }
+      }
+
       while (createAttempts < maxCreateAttempts && !conversationCreated) {
-        const { data: newConversation, error: convError } = await supabase
+        const { data: newConversation, error: convError } = await insertClient
           .from("conversations")
           .insert({
             title: null, // 後で物件名で更新可能
-            user_id: null, // 認証なしの場合
+            user_id: requestUserId, // ログイン中なら Bearer で取得したユーザーID、未ログインなら null
             custom_path: customPath, // ランダムなURLパスを設定
           })
           .select()
@@ -142,11 +165,11 @@ export async function POST(request: Request) {
           // 最後の試行でも失敗した場合は、custom_pathなしで再試行
           if (createAttempts >= maxCreateAttempts) {
             console.warn("[Analyze] All attempts failed. Trying without custom_path...");
-            const { data: fallbackConversation, error: fallbackError } = await supabase
+            const { data: fallbackConversation, error: fallbackError } = await insertClient
               .from("conversations")
               .insert({
                 title: null,
-                user_id: null,
+                user_id: requestUserId,
                 // custom_pathは後で更新
               })
               .select()
@@ -1284,7 +1307,14 @@ ${propertyInfo}
       }
     }
 
-    return NextResponse.json({
+    // Network タブの Response Headers で紐づけ状況を確認できるようにする
+    const responseHeaders: Record<string, string> = {
+      "X-Analyze-Had-Bearer": requestUserId ? "1" : "0",
+      "X-Analyze-User-Id": requestUserId ?? "",
+    };
+
+    return NextResponse.json(
+      {
       success: true,
       conversationId: currentConversationId || null,
       conversationCustomPath: conversationCustomPath,
@@ -1328,7 +1358,9 @@ ${propertyInfo}
         investment_purpose: analysis?.investment_purpose || null,
       },
       analysisId: analysis?.id || null,
-    });
+    },
+    { headers: responseHeaders }
+    );
   } catch (error: any) {
     console.error("[Analyze] Error:", error);
     return NextResponse.json(
