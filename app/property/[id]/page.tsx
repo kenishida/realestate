@@ -1,12 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
 import { useParams } from "next/navigation";
 import ChatInput from "@/components/ChatInput";
 import ChatMessage from "@/components/ChatMessage";
 import PropertyDetails from "@/components/PropertyDetails";
-import AppVerticalSidebar from "@/components/AppVerticalSidebar";
 import InvestmentAnalysis from "@/components/InvestmentAnalysis";
 import ExternalEnvironment from "@/components/ExternalEnvironment";
 import AuthModal from "@/components/AuthModal";
@@ -116,14 +114,21 @@ export default function PropertyPage() {
         analysis,
         propertyDataUnavailable: data.propertyDataUnavailable ?? false,
       });
-      setActiveTab("property");
+      const sims = (data.cashflowSimulations ?? []) as CashflowSimulation[];
+      setCashflowSimulations(sims);
+      setSelectedSimulationId(sims.length > 0 ? sims[0].id : null);
       setCurrentAnalysisId(analysis?.id ?? null);
       setWaitingForPurpose(!!analysis && !hasPurpose);
       setCashflowSimulation(null);
-      setCashflowSimulations((data.cashflowSimulations ?? []) as CashflowSimulation[]);
-      setSelectedSimulationId(null);
       setWaitingForRent(false);
-      setOpenSimulationTab(false);
+      // 保存済みシミュレーションがあれば投資判断タブの収支シミュレーションを開く
+      if (sims.length > 0) {
+        setActiveTab("analysis");
+        setOpenSimulationTab(true);
+      } else {
+        setActiveTab("property");
+        setOpenSimulationTab(false);
+      }
 
       const title = property?.title || property?.address || property?.location || "物件";
       setMessages([
@@ -359,29 +364,16 @@ export default function PropertyPage() {
 
   if (!id) {
     return (
-      <div className="flex h-screen items-center justify-center bg-gray-50">
+      <div className="flex flex-1 items-center justify-center">
         <p className="text-gray-500">物件IDが指定されていません</p>
       </div>
     );
   }
 
   return (
-    <div className="flex h-screen bg-gray-50">
-      <AppVerticalSidebar />
-
-      <div className="flex w-1/2 flex-col border-r border-gray-200 bg-white md:w-1/3">
-        <div className="flex items-center border-b border-gray-200 bg-white px-6 py-4">
-          <div>
-            <Link href="/" className="block">
-              <h1 className="text-xl font-bold text-gray-900 hover:opacity-80">物件価値わかるくん</h1>
-            </Link>
-            <p className="mt-1 text-sm text-gray-600">
-              この物件で新しいチャット（分析から開始）
-            </p>
-          </div>
-        </div>
-
-        <div className="flex-1 overflow-y-auto px-6 py-4">
+    <div className="flex min-h-0 flex-1">
+      <div className="flex min-h-0 w-1/2 flex-1 flex-col border-r border-gray-200 bg-white md:w-1/3">
+        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
           <div className="space-y-4">
             {messages.map((message) => (
               <ChatMessage
@@ -414,7 +406,7 @@ export default function PropertyPage() {
         />
       </div>
 
-      <div className="w-1/2 overflow-y-auto bg-gray-50 p-6 md:w-2/3">
+      <div className="flex min-h-0 w-1/2 flex-1 flex-col overflow-y-auto bg-gray-50 p-6 md:w-2/3">
         <div className="w-full">
           {loadError ? (
             <div className="rounded-lg border border-red-200 bg-red-50 p-6 text-center text-red-700">

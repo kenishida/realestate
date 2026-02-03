@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import AppVerticalSidebar from "@/components/AppVerticalSidebar";
 
 interface ConversationWithProperty {
   id: string;
@@ -28,10 +27,8 @@ export default function ChatsPage() {
   }, []);
 
   return (
-    <div className="flex h-screen bg-gray-50">
-      <AppVerticalSidebar />
-      <main className="flex-1 overflow-y-auto p-6">
-        <div className="mx-auto max-w-2xl">
+    <div className="p-6">
+      <div className="mx-auto max-w-2xl">
           <h1 className="text-xl font-bold text-gray-900">チャット履歴</h1>
           <p className="mt-1 text-sm text-gray-600">
             ログイン中のチャット一覧です
@@ -66,8 +63,7 @@ export default function ChatsPage() {
               ))}
             </ul>
           )}
-        </div>
-      </main>
+      </div>
     </div>
   );
 }

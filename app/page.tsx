@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import Link from "next/link";
 import ChatInput from "@/components/ChatInput";
 import ChatMessage from "@/components/ChatMessage";
 import PropertyDetails from "@/components/PropertyDetails";
@@ -343,21 +342,11 @@ export default function Home() {
   };
 
   return (
-    <div className="flex h-screen bg-gray-50">
-      {/* 縦長ナビゲーション（ホバーでテキスト表示） */}
-      <AppVerticalSidebar />
-
-      {/* 左側: チャットUI */}
-      <div className="flex w-1/2 flex-col border-r border-gray-200 bg-white md:w-1/3">
-        {/* ヘッダー（左: タイトルのみ） */}
-        <header className="flex shrink-0 h-16 items-center border-b border-gray-200 bg-white px-6">
-          <Link href="/" className="text-xl font-bold text-gray-900 hover:opacity-80">
-            物件価値わかるくん
-          </Link>
-        </header>
-
+    <div className="flex min-h-0 flex-1">
+      {/* 左側: チャットUI（下まで表示） */}
+      <div className="flex min-h-0 w-1/2 flex-1 flex-col border-r border-gray-200 bg-white md:w-1/3">
         {/* メッセージ一覧 */}
-        <div className="flex-1 overflow-y-auto px-6 py-4">
+        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
           <div className="space-y-4">
             {messages.map((message) => (
               <ChatMessage
@@ -408,26 +397,8 @@ export default function Home() {
       </div>
 
       {/* 右側: 物件データ表示エリア */}
-      <div className="flex w-1/2 flex-col bg-gray-50 md:w-2/3">
-        {/* ヘッダー（右: ログイン状態のみ） */}
-        <header className="flex shrink-0 h-16 items-center justify-end border-b border-gray-200 bg-white px-6">
-          {!authLoading && user && (
-            <div className="flex items-center gap-2">
-              <span className="max-w-[180px] truncate text-sm text-gray-600" title={user.email}>
-                {user.email}
-              </span>
-              <button
-                type="button"
-                onClick={() => signOut()}
-                className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
-              >
-                ログアウト
-              </button>
-            </div>
-          )}
-        </header>
-
-        <div className="flex-1 overflow-y-auto p-6">
+      <div className="flex min-h-0 w-1/2 flex-1 flex-col bg-gray-50 md:w-2/3">
+        <div className="min-h-0 flex-1 overflow-y-auto p-6">
           <div className="mx-auto max-w-2xl">
           {propertyData ? (
             <>

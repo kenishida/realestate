@@ -8,6 +8,21 @@ export default function AppVerticalSidebar() {
       className="group flex h-full w-16 shrink-0 flex-col border-r border-gray-200 bg-white transition-[width] duration-200 ease-out hover:w-52"
       aria-label="メインナビゲーション"
     >
+      {/* アプリ名（ヘッダー高さ h-16 に揃える） */}
+      <div className="flex h-16 shrink-0 items-center border-b border-gray-200 px-3">
+        <Link
+          href="/"
+          className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-gray-900 transition-colors hover:bg-gray-100"
+          title="物件価値わかるくん"
+        >
+          <span className="flex h-6 w-6 shrink-0 items-center justify-center text-lg font-bold text-gray-700">
+            わ
+          </span>
+          <span className="whitespace-nowrap text-sm font-bold opacity-0 transition-opacity duration-200 group-hover:opacity-100">
+            物件価値わかるくん
+          </span>
+        </Link>
+      </div>
       <nav className="flex flex-1 flex-col gap-1 px-3 py-4">
         {/* ホーム */}
         <Link

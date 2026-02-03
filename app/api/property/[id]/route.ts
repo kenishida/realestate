@@ -121,6 +121,9 @@ export async function GET(
         .select("*")
         .eq("property_analysis_id", analysis.id)
         .order("created_at", { ascending: false });
+      if (simsError) {
+        console.error("[Property API] Error fetching cashflow_simulations:", simsError.message, { property_analysis_id: analysis.id });
+      }
       if (!simsError && sims) cashflowSimulations = sims as CashflowSimulation[];
     }
 

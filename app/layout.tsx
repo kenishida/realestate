@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Asap_Condensed } from "next/font/google";
 import "./globals.css";
 import { AuthProvider } from "@/lib/auth-context";
+import AppShell from "@/components/AppShell";
 
 // Asap Condensedフォントの読み込み
 const customFont = Asap_Condensed({
@@ -25,9 +26,7 @@ export default function RootLayout({
     <html lang="ja" className={customFont.variable}>
       <body className="antialiased">
         <AuthProvider>
-          <main>
-            {children}
-          </main>
+          <AppShell>{children}</AppShell>
         </AuthProvider>
       </body>
     </html>

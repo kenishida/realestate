@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import AppVerticalSidebar from "@/components/AppVerticalSidebar";
 import { useAuth } from "@/lib/auth-context";
 import { createClientSupabase } from "@/lib/supabase";
 
@@ -57,10 +56,8 @@ export default function PropertiesPage() {
   }, [user?.id, session?.access_token]);
 
   return (
-    <div className="flex h-screen bg-gray-50">
-      <AppVerticalSidebar />
-      <main className="flex-1 overflow-y-auto p-6">
-        <div className="mx-auto max-w-5xl">
+    <div className="p-6">
+      <div className="mx-auto max-w-5xl">
           <h1 className="text-xl font-bold text-gray-900">物件一覧</h1>
           <p className="mt-1 text-sm text-gray-600">
             自分が調査した物件です
@@ -121,8 +118,7 @@ export default function PropertiesPage() {
               </table>
             </div>
           )}
-        </div>
-      </main>
+      </div>
     </div>
   );
 }
