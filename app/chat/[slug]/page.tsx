@@ -7,39 +7,9 @@ import ChatMessage from "@/components/ChatMessage";
 import PropertyDetails from "@/components/PropertyDetails";
 import ExternalEnvironment from "@/components/ExternalEnvironment";
 import InvestmentAnalysis from "@/components/InvestmentAnalysis";
-import { computeCashflow, cashflowSimulationToResult } from "@/lib/cashflow-simulation";
+import { cashflowSimulationToResult } from "@/lib/cashflow-simulation";
 import type { CashflowResult } from "@/lib/cashflow-simulation";
 import { Property, type CashflowSimulation } from "@/lib/types";
-
-/** 収支シミュレーションを要求する発言か */
-function isCashflowRequest(text: string): boolean {
-  const t = text.trim().toLowerCase().replace(/\s/g, "");
-  return (
-    t.includes("収支シミュレーション") ||
-    (t.includes("収支") && (t.includes("出して") || t.includes("知りたい") || t.includes("見たい")))
-  );
-}
-
-/** 利回りを要求する発言か（収支シミュレーションで利回りも表示される） */
-function isYieldRequest(text: string): boolean {
-  const t = text.trim().toLowerCase().replace(/\s/g, "");
-  return (
-    (t.includes("利回り") && (t.includes("教えて") || t.includes("知りたい") || t.includes("出して") || t.includes("見たい") || t.includes("聞きたい"))) ||
-    t === "利回り"
-  );
-}
-
-/** 想定家賃（月額・円）をパース。「10万」「10万円」「100000」など */
-function parseMonthlyRent(text: string): number | null {
-  const t = text.trim().replace(/,/g, "").replace(/\s/g, "");
-  const manMatch = t.match(/^(\d+(?:\.\d+)?)\s*万(?:円)?$/);
-  if (manMatch) return Math.round(parseFloat(manMatch[1]) * 10000);
-  const num = parseInt(t, 10);
-  if (!Number.isNaN(num) && num > 0 && num < 1e9) return num;
-  return null;
-}
-
-const DEFAULT_DOWN_PAYMENT = 10_000_000;
 
 interface Message {
   id: string;
@@ -55,13 +25,12 @@ export default function ChatPage() {
 
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [conversationId, setConversationId] = useState<string | null>(null);
   const [propertyData, setPropertyData] = useState<any>(null);
   const [propertyList, setPropertyList] = useState<Property[]>([]);
   const [selectedPropertyId, setSelectedPropertyId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"property" | "environment" | "analysis">("property");
-  const [waitingForPurpose, setWaitingForPurpose] = useState(false);
   const [currentAnalysisId, setCurrentAnalysisId] = useState<string | null>(null);
-  const [waitingForRent, setWaitingForRent] = useState(false);
   const [cashflowSimulation, setCashflowSimulation] = useState<CashflowResult | null>(null);
   const [cashflowSimulations, setCashflowSimulations] = useState<CashflowSimulation[]>([]);
   const [selectedSimulationId, setSelectedSimulationId] = useState<string | null>(null);
@@ -86,6 +55,7 @@ export default function ChatPage() {
       const data = await response.json();
 
       if (data.success) {
+        setConversationId(data.conversation?.id ?? null);
         const list = (data.properties ?? []) as Property[];
         setPropertyList(list);
         const defaultId = data.property?.id ?? list[0]?.id ?? null;
@@ -95,7 +65,6 @@ export default function ChatPage() {
           analysis: data.analysis,
           propertyDataUnavailable: data.propertyDataUnavailable ?? false,
         });
-        setWaitingForRent(false);
         setCashflowSimulation(null);
         const sims = (data.cashflowSimulations ?? []) as CashflowSimulation[];
         setCashflowSimulations(sims);
@@ -228,318 +197,59 @@ export default function ChatPage() {
             timestamp: new Date(),
           };
           setMessages((prev) => [...prev, purposeQuestion]);
-          setWaitingForPurpose(true);
         } else {
           throw new Error(data.error || "Unknown error");
         }
-      } else if (waitingForRent && propertyData?.property) {
-        const price = propertyData.property.price;
-        if (price == null || price <= 0) {
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: (Date.now() + 1).toString(),
-              role: "assistant",
-              content: "物件価格が取得できていません。収支シミュレーションは利用できません。",
-              timestamp: new Date(),
-            },
-          ]);
-          setWaitingForRent(false);
-          setIsLoading(false);
-          return;
-        }
-        const monthlyRent = parseMonthlyRent(content);
-        if (monthlyRent != null) {
-          try {
-            const res = await fetch(`/api/property/${propertyData.property.id}/cashflow-simulations`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ assumed_rent_yen: monthlyRent, down_payment_yen: DEFAULT_DOWN_PAYMENT }),
-            });
-            const simData = await res.json();
-            if (simData.success && simData.simulation) {
-              const sim = simData.simulation as CashflowSimulation;
-              setCashflowSimulations((prev) => [sim, ...prev]);
-              setSelectedSimulationId(sim.id);
-              setCashflowSimulation(null);
-              setOpenSimulationTab(true);
-              setWaitingForRent(false);
-              setActiveTab("analysis");
-              setMessages((prev) => [
-                ...prev,
-                {
-                  id: (Date.now() + 1).toString(),
-                  role: "assistant",
-                  content: `想定家賃 月額${monthlyRent.toLocaleString("ja-JP")}円で収支シミュレーションを計算し、保存しました。右側の「概要」タブ内「収支シミュレーション」をご確認ください。`,
-                  timestamp: new Date(),
-                },
-              ]);
-              setIsLoading(false);
-              return;
-            }
-          } catch (_) {
-            // API失敗時はローカル計算で表示
-          }
-          const result = computeCashflow({
-            propertyPriceYen: price,
-            downPaymentYen: DEFAULT_DOWN_PAYMENT,
-            monthlyRentYen: monthlyRent,
-          });
-          setCashflowSimulation(result);
-          setSelectedSimulationId(null);
-          setOpenSimulationTab(true);
-          setWaitingForRent(false);
-          setActiveTab("analysis");
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: (Date.now() + 1).toString(),
-              role: "assistant",
-              content: `想定家賃 月額${monthlyRent.toLocaleString("ja-JP")}円で収支シミュレーションを計算しました。右側の「概要」タブ内「収支シミュレーション」をご確認ください。`,
-              timestamp: new Date(),
-            },
-          ]);
-          setIsLoading(false);
-          return;
-        }
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: (Date.now() + 1).toString(),
-            role: "assistant",
-            content: "想定家賃を数字で教えてください。例: 10万、10万円、100000",
-            timestamp: new Date(),
-          },
-        ]);
-        setIsLoading(false);
-        return;
-      } else if ((isCashflowRequest(content) || isYieldRequest(content)) && propertyData?.property) {
-        const price = propertyData.property.price;
-        if (price == null || price <= 0) {
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: (Date.now() + 1).toString(),
-              role: "assistant",
-              content: "この物件の価格が取得できていません。収支シミュレーション・利回りは物件価格が分かっている場合に利用できます。",
-              timestamp: new Date(),
-            },
-          ]);
-          setIsLoading(false);
-          return;
-        }
-        setWaitingForRent(true);
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: (Date.now() + 1).toString(),
-            role: "assistant",
-            content: `物件価格は${(price / 1_000_000).toFixed(0)}百万円です。収支シミュレーション・利回りのため、想定家賃（月額・円）を教えてください。例: 10万円、100000`,
-            timestamp: new Date(),
-          },
-        ]);
-        setIsLoading(false);
-        return;
-      } else if (waitingForPurpose) {
-        // 投資目的の回答を処理（自由なテキストとして受け入れる）
-        const parseInvestmentPurpose = (text: string): string => {
-          const normalized = text.trim().toLowerCase();
-          
-          // 番号で判定（後方互換性のため、既存の選択肢も認識）
-          if (normalized === "1" || (normalized.includes("利回り") && !normalized.includes("その他"))) {
-            return "利回り重視";
-          }
-          if (normalized === "2" || (normalized.includes("資産防衛") || normalized.includes("節税")) && !normalized.includes("その他")) {
-            return "資産防衛・節税";
-          }
-          if (normalized === "3" || (normalized.includes("soho") || normalized.includes("住居兼事務所") || normalized.includes("事務所")) && !normalized.includes("その他")) {
-            return "住居兼事務所（SOHO）";
-          }
-          if (normalized === "4" || normalized.includes("その他")) {
-            // "その他"の場合は、ユーザーの入力テキストをそのまま使用
-            return text.trim();
-          }
-          
-          // 認識できない場合は、ユーザーの入力テキストをそのまま使用（自由なテキスト）
-          return text.trim();
-        };
-
-        const purposeText = parseInvestmentPurpose(content);
-
-        // スラグで開いたチャットでは currentAnalysisId が未設定のため、propertyData.analysis.id を利用
-        const analysisIdToUse = currentAnalysisId ?? propertyData?.analysis?.id;
-        if (!analysisIdToUse) {
-          const errorMessage: Message = {
-            id: (Date.now() + 1).toString(),
-            role: "assistant",
-            content: "投資判断データが見つかりません。物件URLを再度送信してから、投資目的を入力してください。",
-            timestamp: new Date(),
-          };
-          setMessages((prev) => [...prev, errorMessage]);
-          setIsLoading(false);
-          return;
-        }
-
-        try {
-          const response = await fetch("/api/analyze-purpose", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              propertyId: propertyData.property.id,
-              analysisId: analysisIdToUse,
-              purpose: purposeText, // 自由なテキストをそのまま送信
-              conversationId: propertyData.conversationId || localStorage.getItem("currentConversationId"),
-            }),
-          });
-
-          const data = await response.json();
-
-          if (!response.ok) {
-            const errorMessage = data.error || "Failed to analyze purpose";
-            const errorDetails = data.details ? `\n${data.details}` : "";
-            throw new Error(`${errorMessage}${errorDetails}`);
-          }
-
-          if (data.success) {
-            const purposeAnalysisMessage: Message = {
-              id: (Date.now() + 1).toString(),
-              role: "assistant",
-              content: data.purposeAnalysis || "投資目的に応じた分析を更新しました。",
-              timestamp: new Date(),
-            };
-
-            setMessages((prev) => [...prev, purposeAnalysisMessage]);
-            
-            setPropertyData((prev: any) => ({
-              ...prev,
-              analysis: {
-                ...prev.analysis,
-                ...data.updatedAnalysis,
-                investment_purpose: purposeText,
-              },
-            }));
-
-            setWaitingForPurpose(false);
-            setCurrentAnalysisId(null);
-          } else {
-            throw new Error(data.error || "Unknown error");
-          }
-        } catch (error: any) {
-          console.error("Error analyzing purpose:", error);
-          const errorDetails = error.message || "不明なエラー";
-          
-          // エラーメッセージを解析
-          let errorContent = "";
-          
-          // カラムが存在しない場合
-          if (errorDetails.includes("investment_purposeカラム") || 
-              errorDetails.includes("データベースカラムのエラー") ||
-              errorDetails.includes("column") || 
-              errorDetails.includes("does not exist") ||
-              errorDetails.includes("42703")) {
-            errorContent = `【エラー】investment_purposeカラムが存在しません\n\n`;
-            errorContent += `【解決方法】\n`;
-            errorContent += `1. Supabaseのダッシュボードを開く\n`;
-            errorContent += `2. 左側メニューから「SQL Editor」を選択\n`;
-            errorContent += `3. 「New query」をクリック\n`;
-            errorContent += `4. 以下のSQLをコピー＆ペーストして実行:\n\n`;
-            errorContent += `-- 1. investment_purposeカラムの追加\n`;
-            errorContent += `ALTER TABLE property_analyses \n`;
-            errorContent += `ADD COLUMN IF NOT EXISTS investment_purpose TEXT;\n\n`;
-            errorContent += `-- 2. インデックスの追加\n`;
-            errorContent += `CREATE INDEX IF NOT EXISTS idx_property_analyses_investment_purpose \n`;
-            errorContent += `ON property_analyses(investment_purpose) \n`;
-            errorContent += `WHERE investment_purpose IS NOT NULL;\n\n`;
-            errorContent += `-- 3. UPDATE権限の設定\n`;
-            errorContent += `DROP POLICY IF EXISTS "Anyone can update property_analyses" ON property_analyses;\n`;
-            errorContent += `CREATE POLICY "Anyone can update property_analyses"\n`;
-            errorContent += `  ON property_analyses FOR UPDATE\n`;
-            errorContent += `  USING (true)\n`;
-            errorContent += `  WITH CHECK (true);\n\n`;
-            errorContent += `5. 実行後、このページをリロードして再度お試しください`;
-          }
-          // RLSポリシーの問題の場合
-          else if (errorDetails.includes("UPDATE権限") || 
-                   errorDetails.includes("データベース権限のエラー") ||
-                   errorDetails.includes("permission") || 
-                   errorDetails.includes("policy") ||
-                   errorDetails.includes("42501")) {
-            errorContent = `【エラー】UPDATE権限がありません\n\n`;
-            errorContent += `【解決方法】\n`;
-            errorContent += `1. Supabaseのダッシュボードを開く\n`;
-            errorContent += `2. SQL Editorを開く\n`;
-            errorContent += `3. 以下のSQLを実行してください:\n\n`;
-            errorContent += `DROP POLICY IF EXISTS "Anyone can update property_analyses" ON property_analyses;\n\n`;
-            errorContent += `CREATE POLICY "Anyone can update property_analyses"\n`;
-            errorContent += `  ON property_analyses FOR UPDATE\n`;
-            errorContent += `  USING (true)\n`;
-            errorContent += `  WITH CHECK (true);\n\n`;
-            errorContent += `4. 実行後、再度お試しください`;
-          } else {
-            errorContent = `エラーが発生しました: ${errorDetails}\n\n`;
-            errorContent += `考えられる原因:\n`;
-            errorContent += `- データベースの更新権限の問題\n`;
-            errorContent += `- investment_purposeカラムが存在しない\n\n`;
-            errorContent += `サーバーログを確認してください。`;
-          }
-          
-          const errorMessage: Message = {
-            id: (Date.now() + 1).toString(),
-            role: "assistant",
-            content: errorContent || `エラーが発生しました: ${errorDetails}`,
-            timestamp: new Date(),
-          };
-          setMessages((prev) => [...prev, errorMessage]);
-          setWaitingForPurpose(false);
-        }
       } else {
-        // 会話状態に応じて返答を切り替え（自由入力時）
-        const hasProperty = !!propertyData?.property;
-        const hasPurpose = !!(
-          propertyData?.analysis?.investment_purpose &&
-          propertyData.analysis.investment_purpose.trim() !== ""
-        );
+        // URL以外: RAG API に送る（物件・会話が紐づいている場合）
+        const cid = conversationId ?? null;
+        const pid = selectedPropertyId ?? propertyData?.property?.id ?? null;
 
-        const trimmedContent = content.trim();
-        const isGreeting =
-          trimmedContent.length <= 20 &&
-          (/^(こんにちは|こんばんは|おはよう|はい|やあ|どうも|よろしく)([。！!]?)$/.test(
-            trimmedContent
-          ) ||
-            /^(こんにちは|おはよう|よろしく)[、。]?\s*/.test(trimmedContent));
+        if (cid && pid) {
+          const ragRes = await fetch("/api/chat/rag", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ conversationId: cid, userMessage: content, propertyId: pid }),
+          });
+          const text = await ragRes.text();
+          let ragData: Record<string, unknown> = {};
+          try {
+            ragData = text ? JSON.parse(text) : {};
+          } catch {
+            if (!ragRes.ok) throw new Error("サーバーエラーです。しばらくしてからお試しください。");
+          }
+          if (!ragRes.ok) {
+            const serverError = typeof ragData.error === "string" && ragData.error.trim() ? ragData.error : null;
+            const details = ragData.details ? `（${String(ragData.details)}）` : "";
+            throw new Error(serverError ? `${serverError}${details}` : `RAGエラー（${ragRes.status}）。しばらくしてからお試しください。`);
+          }
 
-        const greetingPrefix = isGreeting ? "こんにちは。\n\n" : "";
+          const assistantMessage: Message = {
+            id: (Date.now() + 1).toString(),
+            role: "assistant",
+            content: (ragData.content as string) ?? "申し訳ありません。応答を生成できませんでした。",
+            timestamp: new Date(),
+          };
+          setMessages((prev) => [...prev, assistantMessage]);
 
-        let replyContent: string;
-        let shouldWaitForPurpose = false;
-
-        if (!hasProperty) {
-          replyContent =
-            greetingPrefix +
-            "物件URLを入力していただければ、投資判断を行います。\n例: https://athomes.jp/...";
-        } else if (!hasPurpose) {
-          replyContent =
-            greetingPrefix +
-            "この物件について、投資目的を教えてください。\n\n1. 利回り重視\n2. 資産防衛・節税\n3. 住居兼事務所（SOHO）\n4. その他\n\n番号（1-4）または目的を入力してください。";
-          shouldWaitForPurpose = true;
+          if (ragData.updatedAnalysis) {
+            setPropertyData((prev: any) => (prev ? { ...prev, analysis: ragData.updatedAnalysis } : prev));
+          }
+          if (ragData.cashflowSimulation) {
+            setCashflowSimulations((prev) => [(ragData.cashflowSimulation as any), ...prev]);
+            setSelectedSimulationId((ragData.cashflowSimulation as { id: string }).id);
+            setCashflowSimulation((ragData.cashflowResult as any) ?? null);
+            setOpenSimulationTab(true);
+            setActiveTab("analysis");
+          }
         } else {
-          replyContent =
-            greetingPrefix +
-            "この物件について、他に知りたいことはありますか？";
-        }
-
-        const assistantMessage: Message = {
-          id: (Date.now() + 1).toString(),
-          role: "assistant",
-          content: replyContent,
-          timestamp: new Date(),
-        };
-
-        setMessages((prev) => [...prev, assistantMessage]);
-        if (shouldWaitForPurpose) {
-          setWaitingForPurpose(true);
+          const noPropertyMessage: Message = {
+            id: (Date.now() + 1).toString(),
+            role: "assistant",
+            content: "物件が紐づいていません。物件URLを送信して投資判断を取得してから、質問や収支シミュレーションをご利用ください。",
+            timestamp: new Date(),
+          };
+          setMessages((prev) => [...prev, noPropertyMessage]);
         }
       }
     } catch (error: any) {
@@ -554,11 +264,6 @@ export default function ChatPage() {
       hasError = true;
     } finally {
       setIsLoading(false);
-      // エラー時のみ投資目的待ちをリセット
-      if (hasError && waitingForPurpose) {
-        setWaitingForPurpose(false);
-        setCurrentAnalysisId(null);
-      }
     }
   };
 
@@ -581,7 +286,6 @@ export default function ChatPage() {
         setCashflowSimulations(sims);
         setSelectedSimulationId(sims.length > 0 ? sims[0].id : null);
         setCashflowSimulation(null);
-        setWaitingForRent(false);
         setActiveTab("property");
       }
     } catch (error: any) {
