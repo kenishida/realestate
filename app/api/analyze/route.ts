@@ -1132,7 +1132,7 @@ ${propertyInfo}
         yield: 0,
         overall: score || 0,
       };
-      summary = existingAnalysis.summary || existingResult?.summary || analysisText.substring(0, 500);
+      summary = existingAnalysis.summary || existingResult?.summary || (analysisText != null ? analysisText.substring(0, 500) : undefined);
       analysisResult = existingResult || {
         summary,
         recommendation: recommendation || undefined,
@@ -1142,12 +1142,13 @@ ${propertyInfo}
       };
     } else {
       // 新規生成の場合はパース処理を実行
-      structuredAnalysis = parseAnalysis(analysisText);
+      const textForParse = analysisText ?? "";
+      structuredAnalysis = parseAnalysis(textForParse);
 
       // 全体スコアと推奨度を抽出
-      const overallScoreMatch = analysisText.match(/全体の投資スコア:\s*(\d+)/);
-      const recommendationMatch = analysisText.match(/推奨度:\s*(buy|hold|avoid)/i);
-      const yieldScoreMatch = analysisText.match(/収益性スコア:\s*(\d+)/);
+      const overallScoreMatch = analysisText?.match(/全体の投資スコア:\s*(\d+)/);
+      const recommendationMatch = analysisText?.match(/推奨度:\s*(buy|hold|avoid)/i);
+      const yieldScoreMatch = analysisText?.match(/収益性スコア:\s*(\d+)/);
 
       recommendation = recommendationMatch
         ? (recommendationMatch[1].toLowerCase() as "buy" | "hold" | "avoid")
@@ -1165,7 +1166,7 @@ ${propertyInfo}
       };
 
       // サマリー（最初の段落を取得）
-      summary = structuredAnalysis.advice || analysisText.substring(0, 500);
+      summary = structuredAnalysis.advice || (analysisText != null ? analysisText.substring(0, 500) : "");
 
       // 分析結果を構造化
       analysisResult = {
@@ -1242,13 +1243,13 @@ ${propertyInfo}
         console.log("[Analyze] Analysis saved:", analysis.id);
       }
     } else {
-      console.log("[Analyze] Using existing analysis, skipping save:", analysis.id);
+      console.log("[Analyze] Using existing analysis, skipping save:", analysis?.id);
     }
 
     // アシスタントメッセージを保存（会話IDがなくても保存）
     let assistantMessageId: string | null = null;
     if (analysis) {
-      const assistantMessageContent = `投資判断が完了しました。\n\n【推奨度】${recommendation || "評価中"}\n【投資スコア】${score || "評価中"}\n\n${summary || analysisText.substring(0, 500)}`;
+      const assistantMessageContent = `投資判断が完了しました。\n\n【推奨度】${recommendation || "評価中"}\n【投資スコア】${score || "評価中"}\n\n${summary || (analysisText != null ? analysisText.substring(0, 500) : "")}`;
       
       console.log("[Analyze] Saving assistant message:", {
         conversationId: currentConversationId,
