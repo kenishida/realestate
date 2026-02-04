@@ -204,7 +204,7 @@ async function handleRagPost(request: Request): Promise<NextResponse> {
       "【重要】応答は必ず次のJSON形式のみで出力してください。他の説明やマークダウンは付けません。\n" +
       '{"action": "answer" | "ask_purpose" | "run_purpose_analysis" | "ask_rent" | "run_cashflow", "purpose": "目的テキスト（run_purpose_analysisのときのみ）", "rent": 数値（run_cashflowのときのみ、月額家賃円）, "response": "ユーザーに返す日本語の応答文"}\n\n' +
       "- action の意味:\n" +
-      "  - answer: コンテキストから回答するだけ。\n" +
+      "  - answer: コンテキストから回答するだけ。ただし「投資判断・分析結果・投資目的の結果・収支シミュレーションの結果」について聞かれたときは、response には概要だけ（例: 【推奨度】buy 【投資スコア】85）を書き、長文は書かず「右側の『投資判断』『投資目的』『収支シミュレーション』タブで詳細をご確認ください」と促す。\n" +
       "  - ask_purpose: 投資目的（利回り重視・資産防衛・SOHOなど）を聞く。response に質問文を書く。\n" +
       "  - run_purpose_analysis: ユーザーが投資目的を述べたので、その目的で分析を実行する指示。purpose に目的テキスト（例: 利回り重視）を入れる。response には「〇〇の観点で分析します」など短い文を入れる。\n" +
       "  - ask_rent: 収支シミュレーションのため想定家賃（月額・円）を聞く。response に質問文を書く。\n" +
@@ -272,8 +272,10 @@ async function handleRagPost(request: Request): Promise<NextResponse> {
       });
       const purposeData = await purposeRes.json();
       if (purposeData.success && purposeData.purposeAnalysis) {
-        finalContent = purposeData.purposeAnalysis;
         updatedAnalysis = purposeData.updatedAnalysis ?? null;
+        const rec = updatedAnalysis?.recommendation ?? "—";
+        const sc = updatedAnalysis?.score ?? "—";
+        finalContent = `投資目的「${parsed.purpose.trim()}」の分析が完了しました。【推奨度】${rec} 【投資スコア】${sc} 右側の「投資目的」タブで詳細をご確認ください。`;
       } else {
         finalContent = purposeData.error ? "投資目的の分析でエラーが発生しました: " + purposeData.error : responseText;
       }
@@ -310,7 +312,11 @@ async function handleRagPost(request: Request): Promise<NextResponse> {
         if (cashData.success && cashData.simulation) {
           cashflowSimulation = cashData.simulation as CashflowSimulation;
           openSimulationTab = true;
-          finalContent = "想定家賃 月額" + rent.toLocaleString("ja-JP") + "円で収支シミュレーションを計算しました。右側の「投資判断」タブ内「収支シミュレーション」をご確認ください。";
+          const sim = cashData.simulation as CashflowSimulation;
+          const annualBtcf = sim.btcf_yen;
+          const monthlyBtcf = annualBtcf != null ? Math.round(annualBtcf / 12) : null;
+          const summaryLine = monthlyBtcf != null ? ` 月次収支 約${(monthlyBtcf / 10000).toFixed(1)}万円。` : "";
+          finalContent = `想定家賃 月額${rent.toLocaleString("ja-JP")}円で収支シミュレーションを計算しました。${summaryLine}右側の「投資判断」タブ内「収支シミュレーション」をご確認ください。`;
         } else {
           finalContent = cashData.error ? "収支シミュレーションの計算でエラーが発生しました: " + cashData.error : finalContent;
         }

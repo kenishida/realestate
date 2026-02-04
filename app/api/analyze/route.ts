@@ -1249,7 +1249,7 @@ ${propertyInfo}
     // アシスタントメッセージを保存（会話IDがなくても保存）
     let assistantMessageId: string | null = null;
     if (analysis) {
-      const assistantMessageContent = `投資判断が完了しました。\n\n【推奨度】${recommendation || "評価中"}\n【投資スコア】${score || "評価中"}\n\n${summary || (analysisText != null ? analysisText.substring(0, 500) : "")}`;
+      const assistantMessageContent = `投資判断が完了しました。【推奨度】${recommendation || "評価中"} 【投資スコア】${score || "評価中"} 右側の「投資判断」で詳細をご確認ください。`;
       
       console.log("[Analyze] Saving assistant message:", {
         conversationId: currentConversationId,

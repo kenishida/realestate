@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter, useParams } from "next/navigation";
 import ChatInput from "@/components/ChatInput";
 import ChatMessage from "@/components/ChatMessage";
@@ -35,12 +35,18 @@ export default function ChatPage() {
   const [cashflowSimulations, setCashflowSimulations] = useState<CashflowSimulation[]>([]);
   const [selectedSimulationId, setSelectedSimulationId] = useState<string | null>(null);
   const [openSimulationTab, setOpenSimulationTab] = useState(false);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (slug) {
       loadConversationBySlug(slug);
     }
   }, [slug]);
+
+  // メッセージまたはローディング状態が変わったら最下部へスクロール
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, isLoading]);
 
   const loadConversationBySlug = async (customPath: string) => {
     setIsLoading(true);
@@ -165,7 +171,7 @@ export default function ChatPage() {
           const analysisMessage: Message = {
             id: (Date.now() + 1).toString(),
             role: "assistant",
-            content: `投資判断が完了しました。\n\n【推奨度】${data.analysis.recommendation || "評価中"}\n【投資スコア】${data.analysis.score || "評価中"}\n\n${data.analysis.summary || data.analysis.full_analysis.substring(0, 500)}`,
+            content: `投資判断が完了しました。【推奨度】${data.analysis.recommendation || "評価中"} 【投資スコア】${data.analysis.score || "評価中"} 右側の「投資判断」で詳細をご確認ください。`,
             timestamp: new Date(),
           };
 
@@ -339,6 +345,7 @@ export default function ChatPage() {
                 </div>
               </div>
             )}
+            <div ref={messagesEndRef} aria-hidden="true" />
           </div>
         </div>
 

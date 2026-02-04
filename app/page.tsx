@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import ChatInput from "@/components/ChatInput";
 import ChatMessage from "@/components/ChatMessage";
 import PropertyDetails from "@/components/PropertyDetails";
@@ -44,6 +44,12 @@ export default function Home() {
   const [cashflowSimulations, setCashflowSimulations] = useState<CashflowSimulation[]>([]);
   const [selectedSimulationId, setSelectedSimulationId] = useState<string | null>(null);
   const [openSimulationTab, setOpenSimulationTab] = useState(false);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // メッセージまたはローディング状態が変わったら最下部へスクロール
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, isLoading]);
 
   // トップ（ホーム）は「新規会話の入り口」。古い currentConversationId が残っていると
   // 次の物件URLが古い会話に紐づいてしまうため、表示時にクリアしてメッセージも初期化する。
@@ -125,7 +131,7 @@ export default function Home() {
           const analysisMessage: Message = {
             id: (Date.now() + 1).toString(),
             role: "assistant",
-            content: `投資判断が完了しました。\n\n【推奨度】${data.analysis.recommendation || "評価中"}\n【投資スコア】${data.analysis.score || "評価中"}\n\n${data.analysis.summary || data.analysis.full_analysis.substring(0, 500)}`,
+            content: `投資判断が完了しました。【推奨度】${data.analysis.recommendation || "評価中"} 【投資スコア】${data.analysis.score || "評価中"} 右側の「投資判断」で詳細をご確認ください。`,
             timestamp: new Date(),
           };
 
@@ -296,6 +302,7 @@ export default function Home() {
                 </div>
               </div>
             )}
+            <div ref={messagesEndRef} aria-hidden="true" />
           </div>
         </div>
 
