@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { getSupabaseForApi } from "@/lib/supabase-server";
 import { generateTextWithGemini } from "@/lib/gemini";
 import { buildRagContext } from "@/lib/rag-context";
+import { runPurposeAnalysis } from "@/lib/run-purpose-analysis";
+import { runCashflowSimulation } from "@/lib/run-cashflow-simulation";
 import type { PropertyAnalysis, CashflowSimulation } from "@/lib/types";
 import { cashflowSimulationToResult } from "@/lib/cashflow-simulation";
 
@@ -66,28 +68,6 @@ export async function POST(request: Request) {
 
 function jsonError(message: string, status: number = 500) {
   return NextResponse.json({ success: false, error: message }, { status });
-}
-
-/** fetch のレスポンスを安全に JSON としてパース。HTML やエラーページの場合は throw */
-async function parseJsonResponse(res: Response, context: string): Promise<Record<string, unknown>> {
-  const contentType = res.headers.get("content-type") ?? "";
-  if (!contentType.includes("application/json")) {
-    const text = await res.text();
-    const preview = text.slice(0, 200).replace(/\n/g, " ");
-    console.error(`[RAG] ${context}: non-JSON response (${res.status}) content-type=${contentType} body=${preview}`);
-    throw new Error(
-      res.ok
-        ? `${context}: サーバーが JSON ではなく HTML を返しました。`
-        : `${context}: サーバーエラー（${res.status}）。本番のベースURL・環境変数を確認してください。`
-    );
-  }
-  try {
-    return (await res.json()) as Record<string, unknown>;
-  } catch (e) {
-    const err = e instanceof Error ? e : new Error(String(e));
-    console.error(`[RAG] ${context}: JSON parse error`, err.message);
-    throw new Error(`${context}: レスポンスの解析に失敗しました。`);
-  }
 }
 
 async function handleRagPost(request: Request): Promise<NextResponse> {
@@ -279,27 +259,20 @@ async function handleRagPost(request: Request): Promise<NextResponse> {
     let openSimulationTab = false;
 
     if (action === "run_purpose_analysis" && parsed?.purpose && contextResult.analysisId) {
-      const baseUrl =
-        process.env.NEXT_PUBLIC_APP_URL?.trim() ||
-        (process.env.VERCEL_URL ? "https://" + process.env.VERCEL_URL : "http://localhost:3000");
-      const purposeRes = await fetch(baseUrl + "/api/analyze-purpose", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          propertyId,
-          analysisId: contextResult.analysisId,
-          purpose: parsed.purpose.trim(),
-          conversationId,
-        }),
+      const purposeResult = await runPurposeAnalysis({
+        supabase,
+        propertyId,
+        analysisId: contextResult.analysisId,
+        purpose: parsed.purpose.trim(),
+        conversationId,
       });
-      const purposeData = await parseJsonResponse(purposeRes, "投資目的分析");
-      if (purposeData.success && purposeData.purposeAnalysis) {
-        updatedAnalysis = (purposeData.updatedAnalysis ?? null) as PropertyAnalysis | null;
+      if (purposeResult.success) {
+        updatedAnalysis = purposeResult.updatedAnalysis;
         const rec = updatedAnalysis?.recommendation ?? "—";
         const sc = updatedAnalysis?.score ?? "—";
         finalContent = `投資目的「${parsed.purpose.trim()}」の分析が完了しました。【推奨度】${rec} 【投資スコア】${sc} 右側の「投資目的」タブで詳細をご確認ください。`;
       } else {
-        finalContent = purposeData.error ? "投資目的の分析でエラーが発生しました: " + String(purposeData.error) : responseText;
+        finalContent = purposeResult.error ? "投資目的の分析でエラーが発生しました: " + purposeResult.error : responseText;
       }
       const { error: saveErr } = await supabase.from("messages").insert({
         conversation_id: conversationId,
@@ -320,28 +293,22 @@ async function handleRagPost(request: Request): Promise<NextResponse> {
       const rent = parsed?.rent ?? parseMonthlyRent(userMessage);
       const price = contextResult.property?.price;
       if (price != null && price > 0 && rent != null && rent > 0) {
-        const baseUrl =
-          process.env.NEXT_PUBLIC_APP_URL?.trim() ||
-          (process.env.VERCEL_URL ? "https://" + process.env.VERCEL_URL : "http://localhost:3000");
-        const cashRes = await fetch(
-          baseUrl + "/api/property/" + propertyId + "/cashflow-simulations",
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ assumed_rent_yen: rent, down_payment_yen: DEFAULT_DOWN_PAYMENT }),
-          }
-        );
-        const cashData = await parseJsonResponse(cashRes, "収支シミュレーション");
-        if (cashData.success && cashData.simulation) {
-          cashflowSimulation = cashData.simulation as CashflowSimulation;
+        const cashResult = await runCashflowSimulation({
+          supabase,
+          propertyId,
+          assumed_rent_yen: rent,
+          down_payment_yen: DEFAULT_DOWN_PAYMENT,
+        });
+        if (cashResult.success) {
+          cashflowSimulation = cashResult.simulation;
           openSimulationTab = true;
-          const sim = cashData.simulation as CashflowSimulation;
+          const sim = cashResult.simulation;
           const annualBtcf = sim.btcf_yen;
           const monthlyBtcf = annualBtcf != null ? Math.round(annualBtcf / 12) : null;
           const summaryLine = monthlyBtcf != null ? ` 月次収支 約${(monthlyBtcf / 10000).toFixed(1)}万円。` : "";
           finalContent = `想定家賃 月額${rent.toLocaleString("ja-JP")}円で収支シミュレーションを計算しました。${summaryLine}右側の「投資判断」タブ内「収支シミュレーション」をご確認ください。`;
         } else {
-          finalContent = cashData.error ? "収支シミュレーションの計算でエラーが発生しました: " + String(cashData.error) : finalContent;
+          finalContent = cashResult.error ? "収支シミュレーションの計算でエラーが発生しました: " + cashResult.error : finalContent;
         }
       }
     }
