@@ -3,6 +3,20 @@ import { createBrowserClient } from "@supabase/ssr";
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
 
+type CookieToSet = {
+  name: string;
+  value: string;
+  options?: {
+    path?: string;
+    domain?: string;
+    maxAge?: number;
+    expires?: Date;
+    secure?: boolean;
+    httpOnly?: boolean;
+    sameSite?: string;
+  };
+};
+
 // シングルトンインスタンス（クライアントサイド用）
 let clientSupabaseInstance: ReturnType<typeof createBrowserClient> | null = null;
 
@@ -22,7 +36,7 @@ export function createClientSupabase() {
           return { name: name.trim(), value: rest.join('=') };
         });
       },
-      setAll(cookiesToSet) {
+      setAll(cookiesToSet: CookieToSet[]) {
         cookiesToSet.forEach(({ name, value, options }) => {
           const cookieOptions = [
             `path=${options?.path || '/'}`,
