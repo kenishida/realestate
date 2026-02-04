@@ -33,7 +33,7 @@ function getInitialMessage(propertyTitle: string, hasAnalysis: boolean, hasPurpo
     return {
       id: "1",
       role: "assistant",
-      content: `物件「${propertyTitle}」の分析を表示しています。\n\n投資目的を教えてください。\n\n1. 利回り重視\n2. 資産防衛・節税\n3. 住居兼事務所（SOHO）\n4. その他\n\n番号（1-4）または目的を入力してください。`,
+      content: `物件「${propertyTitle}」の分析を表示しています。\n\nこの物件の投資目的を教えてください。たとえば「利回り重視」や「資産防衛・節税」、「実需」などを明確にしていただくと、より精緻な投資アドバイスが可能です。`,
       timestamp: new Date(),
     };
   }
