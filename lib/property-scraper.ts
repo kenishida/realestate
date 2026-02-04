@@ -49,6 +49,8 @@ export async function scrapePropertyData(url: string, html?: string): Promise<Sc
     return scrapeSuumo(url, html);
   } else if (hostname.includes("homes")) {
     return scrapeHomes(url, html);
+  } else if (hostname.includes("rakumachi")) {
+    return scrapeRakumachi(url, html);
   } else {
     throw new Error(`Unsupported property site: ${hostname}`);
   }
@@ -941,5 +943,150 @@ async function scrapeHomes(url: string, html?: string): Promise<ScrapedPropertyD
     },
   };
   console.log("[Scraper] LIFULL completed. Fields:", data.raw_data.scraped_fields);
+  return data;
+}
+
+/**
+ * 楽待（rakumachi.jp）専用パーサー
+ * 物件詳細: .propertySummary__left table（販売価格・利回り）、.propertySummary__right table（所在地・交通・築年月等）
+ */
+async function scrapeRakumachi(url: string, html?: string): Promise<ScrapedPropertyData> {
+  let htmlContent: string;
+  if (html) {
+    htmlContent = html;
+    console.log("[Scraper] Rakumachi: Using provided HTML, length:", htmlContent.length);
+  } else {
+    const result = await fetchPropertyHTML(url);
+    htmlContent = result.html;
+  }
+
+  const $ = cheerio.load(htmlContent);
+  const data = createEmptyScrapedData();
+
+  // タイトル: .propertySummary__title .iconLabel（種別）または title から
+  const titleLabel = $(".propertySummary__title .iconLabel").first().text().trim();
+  if (titleLabel) {
+    const areaMatch = $("meta[name=description]").attr("content")?.match(/^([^\s]+)/);
+    data.title = areaMatch ? `${areaMatch[1]} ${titleLabel}` : titleLabel;
+  }
+  if (!data.title) {
+    const t = $("title").text().trim();
+    const m = t.match(/【楽待】(.+?)\s*\|/);
+    data.title = m ? m[1].trim() : t || null;
+  }
+
+  // 左テーブル: 販売価格・表面利回り
+  const priceText = $(".propertySummary__left .price_data .price").first().text().trim();
+  if (priceText) {
+    const priceMatch = priceText.match(/([\d,]+)\s*万円/);
+    if (priceMatch) data.price = parseInt(priceMatch[1].replace(/,/g, ""), 10) * 10000;
+  }
+
+  const yieldText = $(".propertySummary__left .gross").first().text().trim();
+  if (yieldText) {
+    const ym = yieldText.match(/([\d.]+)\s*%/);
+    if (ym) data.yield_rate = parseFloat(ym[1]);
+  }
+
+  // 右テーブル: th/td ペアでラベルから値を取得
+  const getByTh = (table: ReturnType<typeof $>, thText: string): string | null => {
+    let val: string | null = null;
+    table.find("tr").each((_: number, tr: cheerio.Element) => {
+      const th = $(tr).find("th").first();
+      const label = th.text().trim().replace(/\s+/g, " ").replace(/\u00a0/g, " ");
+      if (label.includes(thText) || label === thText.trim()) {
+        const td = th.next("td");
+        if (td.length) val = td.text().trim().replace(/\s+/g, " ").replace(/\u00a0/g, " ");
+      }
+    });
+    return val;
+  };
+
+  const rightTable = $(".propertySummary__right table").first();
+  if (rightTable.length) {
+    const address = $("#js-address").first().text().trim() || getByTh(rightTable, "所在地");
+    if (address) {
+      data.address = address;
+      data.location = address;
+    }
+
+    const accessStr = getByTh(rightTable, "交通");
+    if (accessStr && !accessStr.includes("乗降客数") && !accessStr.includes("地図")) {
+      data.access = accessStr.replace(/\s+/g, " ").trim();
+      data.transportation = parseTransportationFromText(accessStr);
+    }
+
+    const structureStr = $("#js-structure").first().text().trim() || getByTh(rightTable, "建物構造");
+    if (structureStr) data.building_structure = structureStr;
+
+    const yearStr = getByTh(rightTable, "築年月");
+    if (yearStr) {
+      const yearM = yearStr.match(/(\d{4})年/);
+      const monthM = yearStr.match(/(\d{1,2})月/);
+      if (yearM) data.year_built = parseInt(yearM[1], 10);
+      if (monthM) data.year_built_month = parseInt(monthM[1], 10);
+    }
+
+    const landRightsStr = $("#js-landCertificate").first().text().trim() || getByTh(rightTable, "土地権利");
+    if (landRightsStr) data.land_rights = landRightsStr;
+
+    const buildingAreaStr = $("#js-buildingArea").first().text().trim() || getByTh(rightTable, "建物面積");
+    if (buildingAreaStr) {
+      const m = buildingAreaStr.match(/([\d.]+)\s*㎡/);
+      if (m) data.building_area = parseFloat(m[1]);
+    }
+
+    const landAreaStr = $("#js-landArea").first().text().trim() || getByTh(rightTable, "土地面積");
+    if (landAreaStr) {
+      const m = landAreaStr.match(/([\d.]+)\s*㎡/);
+      if (m) data.land_area = parseFloat(m[1]);
+    }
+  }
+
+  // 詳細ブロック（.hideInformation のラベル＋値）: 接道状況・容積率・建ぺい率
+  const roadAccessCell = $("#popup_sidewalk_situation").closest(".hideInformation").next(".hideInformation");
+  const roadAccessText = roadAccessCell.text().trim().replace(/\s+/g, " ");
+  if (roadAccessText && roadAccessText !== "-") data.road_access = roadAccessText;
+
+  const capacityCell = $("#popup_capacity").closest(".hideInformation").next(".hideInformation");
+  const capacityText = capacityCell.text().trim();
+  const capacityMatch = capacityText.match(/([\d.]+)\s*%/);
+  if (capacityMatch) data.floor_area_ratio = parseFloat(capacityMatch[1]);
+
+  const coverageCell = $("#popup_coverage").closest(".hideInformation").next(".hideInformation");
+  const coverageText = coverageCell.text().trim();
+  const coverageMatch = coverageText.match(/([\d.]+)\s*%/);
+  if (coverageMatch) data.building_coverage_ratio = parseFloat(coverageMatch[1]);
+
+  // 間取り（楽待は一棟物件で間取りが別表示のことがある）
+  const floorPlanStr = $("th").filter((_, el) => $(el).text().trim().startsWith("間取り")).first().next("td").text().trim();
+  if (floorPlanStr && floorPlanStr !== "-") data.floor_plan = floorPlanStr;
+
+  if (data.price != null && (data.land_area != null || data.building_area != null)) {
+    data.price_per_sqm = Math.round(data.price / (data.land_area ?? data.building_area ?? 1));
+  }
+
+  data.raw_data = {
+    html_preview: htmlContent.substring(0, 5000),
+    html_length: htmlContent.length,
+    scraped_at: new Date().toISOString(),
+    scraped_fields: {
+      title: !!data.title,
+      price: !!data.price,
+      address: !!data.address,
+      floor_plan: !!data.floor_plan,
+      year_built: data.year_built != null,
+      building_area: !!data.building_area,
+      land_area: !!data.land_area,
+      building_structure: !!data.building_structure,
+      road_access: !!data.road_access,
+      floor_area_ratio: data.floor_area_ratio != null,
+      building_coverage_ratio: data.building_coverage_ratio != null,
+      zoning: !!data.zoning,
+      land_rights: !!data.land_rights,
+      yield_rate: data.yield_rate != null,
+    },
+  };
+  console.log("[Scraper] Rakumachi completed. Fields:", data.raw_data.scraped_fields);
   return data;
 }
