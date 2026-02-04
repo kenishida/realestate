@@ -117,7 +117,16 @@ export default function Home() {
           }),
         });
 
-        const data = await response.json();
+        const text = await response.text();
+        let data: { success?: boolean; analysis?: { recommendation?: string; score?: string }; analysisId?: string; conversationId?: string; error?: string; details?: string; help?: string; propertyDataUnavailable?: boolean };
+        try {
+          data = text ? JSON.parse(text) : {};
+        } catch {
+          if (text.trimStart().toLowerCase().startsWith("<!")) {
+            throw new Error("サーバーがHTMLを返しました。本番環境のAPI・ネットワークを確認してください。");
+          }
+          throw new Error("サーバー応答の解析に失敗しました。");
+        }
 
         if (!response.ok) {
           const errorMessage = data.error || "Failed to analyze property";
@@ -131,7 +140,7 @@ export default function Home() {
           const analysisMessage: Message = {
             id: (Date.now() + 1).toString(),
             role: "assistant",
-            content: `投資判断が完了しました。【推奨度】${data.analysis.recommendation || "評価中"} 【投資スコア】${data.analysis.score || "評価中"} 右側の「投資判断」で詳細をご確認ください。`,
+            content: `投資判断が完了しました。【推奨度】${data.analysis?.recommendation || "評価中"} 【投資スコア】${data.analysis?.score || "評価中"} 右側の「投資判断」で詳細をご確認ください。`,
             timestamp: new Date(),
           };
 
