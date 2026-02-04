@@ -1,14 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
 import { useParams } from "next/navigation";
 import ChatInput from "@/components/ChatInput";
 import ChatMessage from "@/components/ChatMessage";
 import PropertyDetails from "@/components/PropertyDetails";
-import PropertySidebar from "@/components/PropertySidebar";
 import InvestmentAnalysis from "@/components/InvestmentAnalysis";
 import ExternalEnvironment from "@/components/ExternalEnvironment";
+import AuthModal from "@/components/AuthModal";
+import { useAuth } from "@/lib/auth-context";
 import { computeCashflow, cashflowSimulationToResult } from "@/lib/cashflow-simulation";
 import type { CashflowResult } from "@/lib/cashflow-simulation";
 import type { CashflowSimulation } from "@/lib/types";
@@ -69,12 +69,13 @@ const DEFAULT_DOWN_PAYMENT = 10_000_000; // 1,000万円
 export default function PropertyPage() {
   const params = useParams();
   const id = params?.id as string;
+  const { user } = useAuth();
+  const [authModalOpen, setAuthModalOpen] = useState(false);
 
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [propertyData, setPropertyData] = useState<any>(null);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<"property" | "environment" | "analysis">("property");
   const [waitingForPurpose, setWaitingForPurpose] = useState(false);
   const [currentAnalysisId, setCurrentAnalysisId] = useState<string | null>(null);
@@ -113,14 +114,21 @@ export default function PropertyPage() {
         analysis,
         propertyDataUnavailable: data.propertyDataUnavailable ?? false,
       });
-      setActiveTab("property");
+      const sims = (data.cashflowSimulations ?? []) as CashflowSimulation[];
+      setCashflowSimulations(sims);
+      setSelectedSimulationId(sims.length > 0 ? sims[0].id : null);
       setCurrentAnalysisId(analysis?.id ?? null);
       setWaitingForPurpose(!!analysis && !hasPurpose);
       setCashflowSimulation(null);
-      setCashflowSimulations((data.cashflowSimulations ?? []) as CashflowSimulation[]);
-      setSelectedSimulationId(null);
       setWaitingForRent(false);
-      setOpenSimulationTab(false);
+      // 保存済みシミュレーションがあれば投資判断タブの収支シミュレーションを開く
+      if (sims.length > 0) {
+        setActiveTab("analysis");
+        setOpenSimulationTab(true);
+      } else {
+        setActiveTab("property");
+        setOpenSimulationTab(false);
+      }
 
       const title = property?.title || property?.address || property?.location || "物件";
       setMessages([
@@ -354,51 +362,18 @@ export default function PropertyPage() {
     }
   };
 
-  const handleSelectProperty = (property: { id: string }) => {
-    setIsSidebarOpen(false);
-    if (property.id !== id) {
-      window.location.href = `/property/${property.id}`;
-    }
-  };
-
   if (!id) {
     return (
-      <div className="flex h-screen items-center justify-center bg-gray-50">
+      <div className="flex flex-1 items-center justify-center">
         <p className="text-gray-500">物件IDが指定されていません</p>
       </div>
     );
   }
 
   return (
-    <div className="flex h-screen bg-gray-50">
-      <PropertySidebar
-        isOpen={isSidebarOpen}
-        onClose={() => setIsSidebarOpen(false)}
-        onSelectProperty={handleSelectProperty}
-      />
-
-      <div className="flex w-1/2 flex-col border-r border-gray-200 bg-white md:w-1/3">
-        <div className="flex items-center border-b border-gray-200 bg-white px-6 py-4">
-          <button
-            onClick={() => setIsSidebarOpen(true)}
-            className="mr-3 rounded-lg p-2 text-gray-600 hover:bg-gray-100 hover:text-gray-900"
-            aria-label="メニューを開く"
-          >
-            <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-            </svg>
-          </button>
-          <div>
-            <Link href="/" className="block">
-              <h1 className="text-xl font-bold text-gray-900 hover:opacity-80">物件価値わかるくん</h1>
-            </Link>
-            <p className="mt-1 text-sm text-gray-600">
-              この物件で新しいチャット（分析から開始）
-            </p>
-          </div>
-        </div>
-
-        <div className="flex-1 overflow-y-auto px-6 py-4">
+    <div className="flex min-h-0 flex-1">
+      <div className="flex min-h-0 w-1/2 flex-1 flex-col border-r border-gray-200 bg-white md:w-1/3">
+        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
           <div className="space-y-4">
             {messages.map((message) => (
               <ChatMessage
@@ -431,7 +406,7 @@ export default function PropertyPage() {
         />
       </div>
 
-      <div className="w-1/2 overflow-y-auto bg-gray-50 p-6 md:w-2/3">
+      <div className="flex min-h-0 w-1/2 flex-1 flex-col overflow-y-auto bg-gray-50 p-6 md:w-2/3">
         <div className="w-full">
           {loadError ? (
             <div className="rounded-lg border border-red-200 bg-red-50 p-6 text-center text-red-700">
@@ -461,14 +436,19 @@ export default function PropertyPage() {
                   外部環境
                 </button>
                 <button
-                  onClick={() => setActiveTab("analysis")}
+                  onClick={() => {
+                    setActiveTab("analysis");
+                    if (!user) {
+                      setAuthModalOpen(true);
+                    }
+                  }}
                   className={`flex-1 rounded-full px-4 py-2.5 text-sm font-medium transition-all ${
                     activeTab === "analysis"
                       ? "bg-white text-gray-900 shadow-[0_4px_8px_rgba(0,0,0,0.15),0_2px_4px_rgba(0,0,0,0.1)]"
                       : "bg-gray-100 text-gray-600 shadow-[inset_0_2px_4px_rgba(0,0,0,0.1)] hover:bg-gray-200"
                   }`}
                 >
-                  概要
+                  投資判断
                 </button>
               </div>
 
@@ -493,24 +473,41 @@ export default function PropertyPage() {
                     <ExternalEnvironment propertyId={propertyData.property.id} />
                   </div>
                 )}
-                {activeTab === "analysis" && (() => {
-                  const selectedSim = selectedSimulationId
-                    ? cashflowSimulations.find((s) => s.id === selectedSimulationId)
-                    : null;
-                  const displayResult = selectedSim
-                    ? cashflowSimulationToResult(selectedSim)
-                    : cashflowSimulation;
-                  return (
-                    <InvestmentAnalysis
-                      analysis={propertyData.analysis}
-                      cashflowSimulation={displayResult}
-                      cashflowSimulations={cashflowSimulations}
-                      selectedSimulationId={selectedSimulationId}
-                      onSelectSimulation={setSelectedSimulationId}
-                      openSimulationTab={openSimulationTab}
-                    />
-                  );
-                })()}
+                {activeTab === "analysis" && (
+                  user ? (() => {
+                    const selectedSim = selectedSimulationId
+                      ? cashflowSimulations.find((s) => s.id === selectedSimulationId)
+                      : null;
+                    const displayResult = selectedSim
+                      ? cashflowSimulationToResult(selectedSim)
+                      : cashflowSimulation;
+                    return (
+                      <InvestmentAnalysis
+                        analysis={propertyData.analysis}
+                        cashflowSimulation={displayResult}
+                        cashflowSimulations={cashflowSimulations}
+                        selectedSimulationId={selectedSimulationId}
+                        onSelectSimulation={setSelectedSimulationId}
+                        openSimulationTab={openSimulationTab}
+                      />
+                    );
+                  })() : (
+                    <div className="rounded-lg border border-gray-200 bg-white p-6">
+                      <p className="mb-4 text-center text-gray-600">
+                        投資判断を見るにはログインが必要です
+                      </p>
+                      <div className="flex justify-center">
+                        <button
+                          type="button"
+                          onClick={() => setAuthModalOpen(true)}
+                          className="rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-gray-800"
+                        >
+                          ログイン / 新規登録
+                        </button>
+                      </div>
+                    </div>
+                  )
+                )}
               </div>
             </>
           ) : (
@@ -522,6 +519,13 @@ export default function PropertyPage() {
           )}
         </div>
       </div>
+
+      <AuthModal
+        isOpen={authModalOpen}
+        onClose={() => setAuthModalOpen(false)}
+        onSuccess={() => setAuthModalOpen(false)}
+        message="投資判断を見るにはログインが必要です"
+      />
     </div>
   );
 }

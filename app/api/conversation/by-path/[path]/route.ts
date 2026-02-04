@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSupabaseForApi } from "@/lib/supabase-server";
-import type { Property, PropertyAnalysis, Message, Conversation } from "@/lib/types";
+import type { Property, PropertyAnalysis, Message, Conversation, CashflowSimulation } from "@/lib/types";
 
 /**
  * カスタムパスからチャット履歴（conversation）、物件情報、投資判断を取得するエンドポイント
@@ -62,6 +62,7 @@ export async function GET(
 
     let property: Property | null = null;
     let analysis: PropertyAnalysis | null = null;
+    let cashflowSimulations: CashflowSimulation[] = [];
     let properties: Property[] = [];
 
     if (propertyIdsOrdered.length > 0) {
@@ -91,6 +92,15 @@ export async function GET(
 
         if (!analysesError && analyses && analyses.length > 0) {
           analysis = analyses[0] as PropertyAnalysis;
+          const { data: sims, error: simsError } = await supabase
+            .from("cashflow_simulations")
+            .select("*")
+            .eq("property_analysis_id", analysis.id)
+            .order("created_at", { ascending: false });
+          if (simsError) {
+            console.error("[Conversation API] Error fetching cashflow_simulations:", simsError.message);
+          }
+          if (!simsError && sims) cashflowSimulations = sims as CashflowSimulation[];
         }
       }
     }
@@ -104,6 +114,7 @@ export async function GET(
       conversation: conversation as Conversation,
       property: property,
       analysis: analysis,
+      cashflowSimulations,
       properties,
       propertyDataUnavailable,
       messages: (messages || []) as Message[],

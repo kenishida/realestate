@@ -78,7 +78,7 @@ export default function ChatInput({
     <form onSubmit={handleSubmit} className="border-t border-gray-200 bg-white p-4">
       <div className="flex items-end gap-2">
         <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gray-200 text-sm font-medium text-gray-600">
-          N
+          わ
         </div>
         <div className="relative flex-1">
           <textarea

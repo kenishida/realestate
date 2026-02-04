@@ -1,15 +1,45 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
 import { useRouter, useParams } from "next/navigation";
 import ChatInput from "@/components/ChatInput";
 import ChatMessage from "@/components/ChatMessage";
 import PropertyDetails from "@/components/PropertyDetails";
 import ExternalEnvironment from "@/components/ExternalEnvironment";
-import PropertySidebar from "@/components/PropertySidebar";
 import InvestmentAnalysis from "@/components/InvestmentAnalysis";
-import { Property } from "@/lib/types";
+import { computeCashflow, cashflowSimulationToResult } from "@/lib/cashflow-simulation";
+import type { CashflowResult } from "@/lib/cashflow-simulation";
+import { Property, type CashflowSimulation } from "@/lib/types";
+
+/** 収支シミュレーションを要求する発言か */
+function isCashflowRequest(text: string): boolean {
+  const t = text.trim().toLowerCase().replace(/\s/g, "");
+  return (
+    t.includes("収支シミュレーション") ||
+    (t.includes("収支") && (t.includes("出して") || t.includes("知りたい") || t.includes("見たい")))
+  );
+}
+
+/** 利回りを要求する発言か（収支シミュレーションで利回りも表示される） */
+function isYieldRequest(text: string): boolean {
+  const t = text.trim().toLowerCase().replace(/\s/g, "");
+  return (
+    (t.includes("利回り") && (t.includes("教えて") || t.includes("知りたい") || t.includes("出して") || t.includes("見たい") || t.includes("聞きたい"))) ||
+    t === "利回り"
+  );
+}
+
+/** 想定家賃（月額・円）をパース。「10万」「10万円」「100000」など */
+function parseMonthlyRent(text: string): number | null {
+  const t = text.trim().replace(/,/g, "").replace(/\s/g, "");
+  const manMatch = t.match(/^(\d+(?:\.\d+)?)\s*万(?:円)?$/);
+  if (manMatch) return Math.round(parseFloat(manMatch[1]) * 10000);
+  const num = parseInt(t, 10);
+  if (!Number.isNaN(num) && num > 0 && num < 1e9) return num;
+  return null;
+}
+
+const DEFAULT_DOWN_PAYMENT = 10_000_000;
 
 interface Message {
   id: string;
@@ -28,10 +58,14 @@ export default function ChatPage() {
   const [propertyData, setPropertyData] = useState<any>(null);
   const [propertyList, setPropertyList] = useState<Property[]>([]);
   const [selectedPropertyId, setSelectedPropertyId] = useState<string | null>(null);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<"property" | "environment" | "analysis">("property");
   const [waitingForPurpose, setWaitingForPurpose] = useState(false);
   const [currentAnalysisId, setCurrentAnalysisId] = useState<string | null>(null);
+  const [waitingForRent, setWaitingForRent] = useState(false);
+  const [cashflowSimulation, setCashflowSimulation] = useState<CashflowResult | null>(null);
+  const [cashflowSimulations, setCashflowSimulations] = useState<CashflowSimulation[]>([]);
+  const [selectedSimulationId, setSelectedSimulationId] = useState<string | null>(null);
+  const [openSimulationTab, setOpenSimulationTab] = useState(false);
 
   useEffect(() => {
     if (slug) {
@@ -61,7 +95,18 @@ export default function ChatPage() {
           analysis: data.analysis,
           propertyDataUnavailable: data.propertyDataUnavailable ?? false,
         });
-        setActiveTab("property");
+        setWaitingForRent(false);
+        setCashflowSimulation(null);
+        const sims = (data.cashflowSimulations ?? []) as CashflowSimulation[];
+        setCashflowSimulations(sims);
+        setSelectedSimulationId(sims.length > 0 ? sims[0].id : null);
+        if (sims.length > 0) {
+          setActiveTab("analysis");
+          setOpenSimulationTab(true);
+        } else {
+          setActiveTab("property");
+          setOpenSimulationTab(false);
+        }
 
         // メッセージ履歴を表示
         if (data.messages && data.messages.length > 0) {
@@ -187,6 +232,114 @@ export default function ChatPage() {
         } else {
           throw new Error(data.error || "Unknown error");
         }
+      } else if (waitingForRent && propertyData?.property) {
+        const price = propertyData.property.price;
+        if (price == null || price <= 0) {
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: (Date.now() + 1).toString(),
+              role: "assistant",
+              content: "物件価格が取得できていません。収支シミュレーションは利用できません。",
+              timestamp: new Date(),
+            },
+          ]);
+          setWaitingForRent(false);
+          setIsLoading(false);
+          return;
+        }
+        const monthlyRent = parseMonthlyRent(content);
+        if (monthlyRent != null) {
+          try {
+            const res = await fetch(`/api/property/${propertyData.property.id}/cashflow-simulations`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ assumed_rent_yen: monthlyRent, down_payment_yen: DEFAULT_DOWN_PAYMENT }),
+            });
+            const simData = await res.json();
+            if (simData.success && simData.simulation) {
+              const sim = simData.simulation as CashflowSimulation;
+              setCashflowSimulations((prev) => [sim, ...prev]);
+              setSelectedSimulationId(sim.id);
+              setCashflowSimulation(null);
+              setOpenSimulationTab(true);
+              setWaitingForRent(false);
+              setActiveTab("analysis");
+              setMessages((prev) => [
+                ...prev,
+                {
+                  id: (Date.now() + 1).toString(),
+                  role: "assistant",
+                  content: `想定家賃 月額${monthlyRent.toLocaleString("ja-JP")}円で収支シミュレーションを計算し、保存しました。右側の「概要」タブ内「収支シミュレーション」をご確認ください。`,
+                  timestamp: new Date(),
+                },
+              ]);
+              setIsLoading(false);
+              return;
+            }
+          } catch (_) {
+            // API失敗時はローカル計算で表示
+          }
+          const result = computeCashflow({
+            propertyPriceYen: price,
+            downPaymentYen: DEFAULT_DOWN_PAYMENT,
+            monthlyRentYen: monthlyRent,
+          });
+          setCashflowSimulation(result);
+          setSelectedSimulationId(null);
+          setOpenSimulationTab(true);
+          setWaitingForRent(false);
+          setActiveTab("analysis");
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: (Date.now() + 1).toString(),
+              role: "assistant",
+              content: `想定家賃 月額${monthlyRent.toLocaleString("ja-JP")}円で収支シミュレーションを計算しました。右側の「概要」タブ内「収支シミュレーション」をご確認ください。`,
+              timestamp: new Date(),
+            },
+          ]);
+          setIsLoading(false);
+          return;
+        }
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: (Date.now() + 1).toString(),
+            role: "assistant",
+            content: "想定家賃を数字で教えてください。例: 10万、10万円、100000",
+            timestamp: new Date(),
+          },
+        ]);
+        setIsLoading(false);
+        return;
+      } else if ((isCashflowRequest(content) || isYieldRequest(content)) && propertyData?.property) {
+        const price = propertyData.property.price;
+        if (price == null || price <= 0) {
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: (Date.now() + 1).toString(),
+              role: "assistant",
+              content: "この物件の価格が取得できていません。収支シミュレーション・利回りは物件価格が分かっている場合に利用できます。",
+              timestamp: new Date(),
+            },
+          ]);
+          setIsLoading(false);
+          return;
+        }
+        setWaitingForRent(true);
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: (Date.now() + 1).toString(),
+            role: "assistant",
+            content: `物件価格は${(price / 1_000_000).toFixed(0)}百万円です。収支シミュレーション・利回りのため、想定家賃（月額・円）を教えてください。例: 10万円、100000`,
+            timestamp: new Date(),
+          },
+        ]);
+        setIsLoading(false);
+        return;
       } else if (waitingForPurpose) {
         // 投資目的の回答を処理（自由なテキストとして受け入れる）
         const parseInvestmentPurpose = (text: string): string => {
@@ -424,118 +577,26 @@ export default function ChatPage() {
           analysis: data.analysis,
           propertyDataUnavailable: data.propertyDataUnavailable ?? false,
         });
+        const sims = (data.cashflowSimulations ?? []) as CashflowSimulation[];
+        setCashflowSimulations(sims);
+        setSelectedSimulationId(sims.length > 0 ? sims[0].id : null);
+        setCashflowSimulation(null);
+        setWaitingForRent(false);
         setActiveTab("property");
       }
     } catch (error: any) {
       console.error("Error loading property:", error);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleSelectProperty = async (property: Property) => {
-    console.log("Selected property:", property);
-    setIsSidebarOpen(false);
-    
-    // 物件を選択した場合は、その物件に関連するチャット履歴を取得して表示
-    // ここでは既存の動作を維持
-    setIsLoading(true);
-    try {
-      const response = await fetch(`/api/property/${property.id}`);
-      
-      if (!response.ok) {
-        throw new Error("Failed to fetch property data");
-      }
-
-      const data = await response.json();
-
-      if (data.success) {
-        setPropertyData({
-          property: data.property,
-          analysis: data.analysis,
-          propertyDataUnavailable: data.propertyDataUnavailable ?? false,
-        });
-        setActiveTab("property");
-
-        if (data.messages && data.messages.length > 0) {
-          const messageHistory: Message[] = data.messages.map((msg: any) => ({
-            id: msg.id,
-            role: msg.role as "user" | "assistant" | "system",
-            content: msg.content,
-            timestamp: new Date(msg.created_at),
-          }));
-          setMessages(messageHistory);
-        } else {
-          setMessages([
-            {
-              id: "1",
-              role: "assistant",
-              content: `物件「${data.property.title || data.property.address || "物件"}」の情報を表示しています。\n\n右側に物件詳細と投資判断を表示しています。`,
-              timestamp: new Date(),
-            },
-          ]);
-        }
-      } else {
-        throw new Error(data.error || "Unknown error");
-      }
-    } catch (error: any) {
-      console.error("Error loading property:", error);
-      const errorMessage: Message = {
-        id: Date.now().toString(),
-        role: "assistant",
-        content: `エラーが発生しました: ${error.message || "不明なエラー"}`,
-        timestamp: new Date(),
-      };
-      setMessages((prev) => [...prev, errorMessage]);
     } finally {
       setIsLoading(false);
     }
   };
 
   return (
-    <div className="flex h-screen bg-gray-50">
-      {/* サイドバー */}
-      <PropertySidebar
-        isOpen={isSidebarOpen}
-        onClose={() => setIsSidebarOpen(false)}
-        onSelectProperty={handleSelectProperty}
-      />
-
-      {/* 左側: チャットUI */}
-      <div className="flex w-1/2 flex-col border-r border-gray-200 bg-white md:w-1/3">
-        {/* ヘッダー */}
-        <div className="flex items-center border-b border-gray-200 bg-white px-6 py-4">
-          <button
-            onClick={() => setIsSidebarOpen(true)}
-            className="mr-3 rounded-lg p-2 text-gray-600 hover:bg-gray-100 hover:text-gray-900"
-            aria-label="メニューを開く"
-          >
-            <svg
-              className="h-6 w-6"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M4 6h16M4 12h16M4 18h16"
-              />
-            </svg>
-          </button>
-          <div>
-            <Link href="/" className="block">
-              <h1 className="text-xl font-bold text-gray-900 hover:opacity-80">物件価値わかるくん</h1>
-            </Link>
-            <p className="mt-1 text-sm text-gray-600">
-              物件URLを入力して投資判断を取得
-            </p>
-          </div>
-        </div>
-
+    <div className="flex min-h-0 flex-1">
+      {/* 左側: チャットUI（下まで表示） */}
+      <div className="flex min-h-0 w-1/2 flex-1 flex-col border-r border-gray-200 bg-white md:w-1/3">
         {/* メッセージ一覧 */}
-        <div className="flex-1 overflow-y-auto px-6 py-4">
+        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
           <div className="space-y-4">
             {messages.map((message) => (
               <ChatMessage
@@ -680,9 +741,24 @@ export default function ChatPage() {
                     <ExternalEnvironment propertyId={propertyData.property.id} />
                   </div>
                 )}
-                {activeTab === "analysis" && (
-                  <InvestmentAnalysis analysis={propertyData.analysis} />
-                )}
+                {activeTab === "analysis" && (() => {
+                  const selectedSim = selectedSimulationId
+                    ? cashflowSimulations.find((s) => s.id === selectedSimulationId)
+                    : null;
+                  const displayResult = selectedSim
+                    ? cashflowSimulationToResult(selectedSim)
+                    : cashflowSimulation;
+                  return (
+                    <InvestmentAnalysis
+                      analysis={propertyData.analysis}
+                      cashflowSimulation={displayResult}
+                      cashflowSimulations={cashflowSimulations}
+                      selectedSimulationId={selectedSimulationId}
+                      onSelectSimulation={setSelectedSimulationId}
+                      openSimulationTab={openSimulationTab}
+                    />
+                  );
+                })()}
               </div>
             </>
           ) : (
