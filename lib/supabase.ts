@@ -22,7 +22,7 @@ export function createClientSupabase() {
           return { name: name.trim(), value: rest.join('=') };
         });
       },
-      setAll(cookiesToSet) {
+      setAll(cookiesToSet: { name: string; value: string; options?: Record<string, unknown> }[]) {
         cookiesToSet.forEach(({ name, value, options }) => {
           const cookieOptions = [
             `path=${options?.path || '/'}`,
