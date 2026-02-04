@@ -33,12 +33,12 @@
 
 ```env
 # Gemini API
-GEMINI_API_KEY=AIzaSyAg79yS4clusdDsUj-W6OO_rntLItixFR4
+GEMINI_API_KEY=your_gemini_api_key_here
 
 # Supabase
 NEXT_PUBLIC_SUPABASE_URL=https://xxxxx.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
-SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGci...
+SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJ...
 ```
 
 **重要**: 
