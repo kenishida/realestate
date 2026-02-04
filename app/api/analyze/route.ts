@@ -441,6 +441,8 @@ export async function POST(request: Request) {
         ? "suumo"
         : propertyUrl.hostname.includes("homes")
         ? "homes"
+        : propertyUrl.hostname.includes("rakumachi")
+        ? "rakumachi"
         : "unknown";
       const { data: minimalProperty, error: minimalErr } = await supabase
         .from("properties")
@@ -538,6 +540,8 @@ export async function POST(request: Request) {
         ? "suumo"
         : propertyUrl.hostname.includes("homes")
         ? "homes"
+        : propertyUrl.hostname.includes("rakumachi")
+        ? "rakumachi"
         : "unknown";
 
       // 既存データがある場合は更新、ない場合は新規作成

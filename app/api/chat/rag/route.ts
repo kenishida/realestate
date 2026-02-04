@@ -205,7 +205,7 @@ async function handleRagPost(request: Request): Promise<NextResponse> {
       '{"action": "answer" | "ask_purpose" | "run_purpose_analysis" | "ask_rent" | "run_cashflow", "purpose": "目的テキスト（run_purpose_analysisのときのみ）", "rent": 数値（run_cashflowのときのみ、月額家賃円）, "response": "ユーザーに返す日本語の応答文"}\n\n' +
       "- action の意味:\n" +
       "  - answer: コンテキストから回答するだけ。ただし「投資判断・分析結果・投資目的の結果・収支シミュレーションの結果」について聞かれたときは、response には概要だけ（例: 【推奨度】buy 【投資スコア】85）を書き、長文は書かず「右側の『投資判断』『投資目的』『収支シミュレーション』タブで詳細をご確認ください」と促す。\n" +
-      "  - ask_purpose: 投資目的（利回り重視・資産防衛・SOHOなど）を聞く。response に質問文を書く。\n" +
+      "  - ask_purpose: 投資目的を聞く。response には番号や選択肢の羅列は避け、自然な一文で「たとえば『利回り重視』や『資産防衛・節税』『実需』などを教えていただくと、より精緻なアドバイスが可能です」のようなこなれた質問文を書く。\n" +
       "  - run_purpose_analysis: ユーザーが投資目的を述べたので、その目的で分析を実行する指示。purpose に目的テキスト（例: 利回り重視）を入れる。response には「〇〇の観点で分析します」など短い文を入れる。\n" +
       "  - ask_rent: 収支シミュレーションのため想定家賃（月額・円）を聞く。response に質問文を書く。\n" +
       "  - run_cashflow: ユーザーが家賃を入力したので収支シミュレーションを実行する指示。rent に月額家賃（円）を数値で入れる。response には「想定家賃〇〇円で計算します」など短い文を入れる。\n\n" +
