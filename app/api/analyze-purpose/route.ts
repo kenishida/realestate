@@ -314,9 +314,11 @@ CREATE POLICY "Anyone can update property_analyses"
     
     console.log("[Analyze Purpose] Analysis updated successfully:", updatedAnalysis.id);
 
-    // アシスタントメッセージを保存
+    // アシスタントメッセージを保存（概要のみ・詳細は右側タブ参照を促す）
     if (conversationId) {
-      const assistantMessageContent = `投資目的「${purposeLabel}」に基づいた分析が完了しました。\n\n${purposeAnalysisText}`;
+      const rec = updatedAnalysis?.recommendation ?? "—";
+      const sc = updatedAnalysis?.score ?? "—";
+      const assistantMessageContent = `投資目的「${purposeLabel}」の分析が完了しました。【推奨度】${rec} 【投資スコア】${sc} 右側の「投資目的」タブで詳細をご確認ください。`;
 
       const { data: assistantMessage, error: assistantMsgError } = await supabase
         .from("messages")

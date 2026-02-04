@@ -1,15 +1,19 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import ChatInput from "@/components/ChatInput";
 import ChatMessage from "@/components/ChatMessage";
 import PropertyDetails from "@/components/PropertyDetails";
 import AppVerticalSidebar from "@/components/AppVerticalSidebar";
 import InvestmentAnalysis from "@/components/InvestmentAnalysis";
 import ExternalEnvironment from "@/components/ExternalEnvironment";
+import HomeRightColumnPlaceholder from "@/components/HomeRightColumnPlaceholder";
 import AuthModal from "@/components/AuthModal";
 import { useAuth } from "@/lib/auth-context";
 import { createClientSupabase } from "@/lib/supabase";
+import { cashflowSimulationToResult } from "@/lib/cashflow-simulation";
+import type { CashflowResult } from "@/lib/cashflow-simulation";
+import type { CashflowSimulation } from "@/lib/types";
 
 interface Message {
   id: string;
@@ -35,6 +39,17 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState<"property" | "environment" | "analysis">("property");
   const [waitingForPurpose, setWaitingForPurpose] = useState(false);
   const [currentAnalysisId, setCurrentAnalysisId] = useState<string | null>(null);
+  const [waitingForRent, setWaitingForRent] = useState(false);
+  const [cashflowSimulation, setCashflowSimulation] = useState<CashflowResult | null>(null);
+  const [cashflowSimulations, setCashflowSimulations] = useState<CashflowSimulation[]>([]);
+  const [selectedSimulationId, setSelectedSimulationId] = useState<string | null>(null);
+  const [openSimulationTab, setOpenSimulationTab] = useState(false);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // メッセージまたはローディング状態が変わったら最下部へスクロール
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, isLoading]);
 
   // トップ（ホーム）は「新規会話の入り口」。古い currentConversationId が残っていると
   // 次の物件URLが古い会話に紐づいてしまうため、表示時にクリアしてメッセージも初期化する。
@@ -52,6 +67,9 @@ export default function Home() {
     setPropertyData(null);
     setCurrentAnalysisId(null);
     setWaitingForPurpose(false);
+    setWaitingForRent(false);
+    setCashflowSimulation(null);
+    setOpenSimulationTab(false);
   }, []);
 
   const handleSendMessage = async (content: string) => {
@@ -113,7 +131,7 @@ export default function Home() {
           const analysisMessage: Message = {
             id: (Date.now() + 1).toString(),
             role: "assistant",
-            content: `投資判断が完了しました。\n\n【推奨度】${data.analysis.recommendation || "評価中"}\n【投資スコア】${data.analysis.score || "評価中"}\n\n${data.analysis.summary || data.analysis.full_analysis.substring(0, 500)}`,
+            content: `投資判断が完了しました。【推奨度】${data.analysis.recommendation || "評価中"} 【投資スコア】${data.analysis.score || "評価中"} 右側の「投資判断」で詳細をご確認ください。`,
             timestamp: new Date(),
           };
 
@@ -142,164 +160,60 @@ export default function Home() {
         } else {
           throw new Error(data.error || "Unknown error");
         }
-      } else if (waitingForPurpose) {
-        // 投資目的の回答を処理（自由なテキストとして受け入れる）
-        const parseInvestmentPurpose = (text: string): string => {
-          const normalized = text.trim().toLowerCase();
-          
-          // 番号で判定（後方互換性のため、既存の選択肢も認識）
-          if (normalized === "1" || (normalized.includes("利回り") && !normalized.includes("その他"))) {
-            return "利回り重視";
-          }
-          if (normalized === "2" || (normalized.includes("資産防衛") || normalized.includes("節税")) && !normalized.includes("その他")) {
-            return "資産防衛・節税";
-          }
-          if (normalized === "3" || (normalized.includes("soho") || normalized.includes("住居兼事務所") || normalized.includes("事務所")) && !normalized.includes("その他")) {
-            return "住居兼事務所（SOHO）";
-          }
-          if (normalized === "4" || normalized.includes("その他")) {
-            // "その他"の場合は、ユーザーに具体的な目的を聞く必要があるが、
-            // 今回は自由なテキストとして受け入れるため、入力テキストをそのまま使用
-            return text.trim();
-          }
-          
-          // 認識できない場合は、ユーザーの入力テキストをそのまま使用（自由なテキスト）
-          return text.trim();
-        };
+      } else {
+        // RAG: 物件が紐づいている会話では RAG API に送る
+        const conversationId = propertyData?.conversationId ?? localStorage.getItem("currentConversationId");
+        const propertyId = propertyData?.property?.id;
 
-        const purposeText = parseInvestmentPurpose(content);
-
-        // 投資目的に応じた追加分析を取得
-        try {
-          const response = await fetch("/api/analyze-purpose", {
+        if (propertyId && conversationId) {
+          const ragRes = await fetch("/api/chat/rag", {
             method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              propertyId: propertyData.property.id,
-              analysisId: currentAnalysisId,
-              purpose: purposeText, // 自由なテキストをそのまま送信
-              conversationId: propertyData.conversationId || localStorage.getItem("currentConversationId"),
-            }),
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ conversationId, userMessage: content, propertyId }),
           });
-
-          const data = await response.json();
-
-          if (!response.ok) {
-            const errorMessage = data.error || "Failed to analyze purpose";
-            const errorDetails = data.details ? `\n${data.details}` : "";
-            throw new Error(`${errorMessage}${errorDetails}`);
+          const text = await ragRes.text();
+          let ragData: Record<string, unknown> = {};
+          try {
+            ragData = text ? JSON.parse(text) : {};
+          } catch {
+            if (!ragRes.ok) throw new Error("サーバーエラーです。しばらくしてからお試しください。");
+          }
+          if (!ragRes.ok) {
+            const serverError = typeof ragData.error === "string" && ragData.error.trim() ? ragData.error : null;
+            const details = ragData.details ? `（${String(ragData.details)}）` : "";
+            if (!serverError && text) {
+              console.error("[RAG] 500 response body:", text.slice(0, 500));
+            }
+            throw new Error(serverError ? `${serverError}${details}` : `RAGエラー（${ragRes.status}）。ターミナルのサーバーログで [RAG] を確認してください。`);
           }
 
-          if (data.success) {
-            // 更新された分析結果を表示
-            const purposeAnalysisMessage: Message = {
-              id: (Date.now() + 1).toString(),
-              role: "assistant",
-              content: data.purposeAnalysis || "投資目的に応じた分析を更新しました。",
-              timestamp: new Date(),
-            };
-
-            setMessages((prev) => [...prev, purposeAnalysisMessage]);
-            
-            // プロパティデータを更新
-            setPropertyData((prev: any) => ({
-              ...prev,
-              analysis: {
-                ...prev.analysis,
-                ...data.updatedAnalysis,
-                investment_purpose: purposeText,
-              },
-              propertyDataUnavailable: prev.propertyDataUnavailable ?? false,
-            }));
-
-            setWaitingForPurpose(false);
-            setCurrentAnalysisId(null);
-          } else {
-            // エラーの詳細を取得
-            const errorMessage = data.error || "Unknown error";
-            const errorDetails = data.details || "";
-            throw new Error(`${errorMessage}${errorDetails ? `\n${errorDetails}` : ""}`);
-          }
-        } catch (error: any) {
-          console.error("Error analyzing purpose:", error);
-          const errorDetails = error.message || "不明なエラー";
-          
-          // エラーメッセージを解析
-          let errorContent = "";
-          
-          // カラムが存在しない場合
-          if (errorDetails.includes("investment_purposeカラム") || 
-              errorDetails.includes("データベースカラムのエラー") ||
-              errorDetails.includes("column") || 
-              errorDetails.includes("does not exist") ||
-              errorDetails.includes("42703")) {
-            errorContent = `【エラー】investment_purposeカラムが存在しません\n\n`;
-            errorContent += `【解決方法】\n`;
-            errorContent += `1. Supabaseのダッシュボードを開く\n`;
-            errorContent += `2. 左側メニューから「SQL Editor」を選択\n`;
-            errorContent += `3. 「New query」をクリック\n`;
-            errorContent += `4. 以下のSQLをコピー＆ペーストして実行:\n\n`;
-            errorContent += `-- 1. investment_purposeカラムの追加\n`;
-            errorContent += `ALTER TABLE property_analyses \n`;
-            errorContent += `ADD COLUMN IF NOT EXISTS investment_purpose TEXT;\n\n`;
-            errorContent += `-- 2. インデックスの追加\n`;
-            errorContent += `CREATE INDEX IF NOT EXISTS idx_property_analyses_investment_purpose \n`;
-            errorContent += `ON property_analyses(investment_purpose) \n`;
-            errorContent += `WHERE investment_purpose IS NOT NULL;\n\n`;
-            errorContent += `-- 3. UPDATE権限の設定\n`;
-            errorContent += `DROP POLICY IF EXISTS "Anyone can update property_analyses" ON property_analyses;\n`;
-            errorContent += `CREATE POLICY "Anyone can update property_analyses"\n`;
-            errorContent += `  ON property_analyses FOR UPDATE\n`;
-            errorContent += `  USING (true)\n`;
-            errorContent += `  WITH CHECK (true);\n\n`;
-            errorContent += `5. 実行後、このページをリロードして再度お試しください`;
-          }
-          // RLSポリシーの問題の場合
-          else if (errorDetails.includes("UPDATE権限") || 
-                   errorDetails.includes("データベース権限のエラー") ||
-                   errorDetails.includes("permission") || 
-                   errorDetails.includes("policy") ||
-                   errorDetails.includes("42501")) {
-            errorContent = `【エラー】UPDATE権限がありません\n\n`;
-            errorContent += `【解決方法】\n`;
-            errorContent += `1. Supabaseのダッシュボードを開く\n`;
-            errorContent += `2. SQL Editorを開く\n`;
-            errorContent += `3. 以下のSQLを実行してください:\n\n`;
-            errorContent += `DROP POLICY IF EXISTS "Anyone can update property_analyses" ON property_analyses;\n\n`;
-            errorContent += `CREATE POLICY "Anyone can update property_analyses"\n`;
-            errorContent += `  ON property_analyses FOR UPDATE\n`;
-            errorContent += `  USING (true)\n`;
-            errorContent += `  WITH CHECK (true);\n\n`;
-            errorContent += `4. 実行後、再度お試しください`;
-          } else {
-            errorContent = `エラーが発生しました: ${errorDetails}\n\n`;
-            errorContent += `考えられる原因:\n`;
-            errorContent += `- データベースの更新権限の問題\n`;
-            errorContent += `- investment_purposeカラムが存在しない\n\n`;
-            errorContent += `サーバーログを確認してください。`;
-          }
-          
-          const errorMessage: Message = {
+          const assistantMessage: Message = {
             id: (Date.now() + 1).toString(),
             role: "assistant",
-            content: errorContent,
+            content: (ragData.content as string) ?? "申し訳ありません。応答を生成できませんでした。",
             timestamp: new Date(),
           };
-          setMessages((prev) => [...prev, errorMessage]);
-          setWaitingForPurpose(false);
-        }
-      } else {
-        // 通常のメッセージの場合
-        const assistantMessage: Message = {
-          id: (Date.now() + 1).toString(),
-          role: "assistant",
-          content: "物件URLを入力していただければ、投資判断を行います。\n例: https://athomes.jp/...",
-          timestamp: new Date(),
-        };
+          setMessages((prev) => [...prev, assistantMessage]);
 
-        setMessages((prev) => [...prev, assistantMessage]);
+          if (ragData.updatedAnalysis) {
+            setPropertyData((prev: any) => (prev ? { ...prev, analysis: ragData.updatedAnalysis } : prev));
+          }
+          if (ragData.cashflowSimulation) {
+            setCashflowSimulations((prev) => [(ragData.cashflowSimulation as any), ...prev]);
+            setSelectedSimulationId((ragData.cashflowSimulation as { id: string }).id);
+            setCashflowSimulation((ragData.cashflowResult as any) ?? null);
+            setOpenSimulationTab(true);
+            setActiveTab("analysis");
+          }
+        } else {
+          const noPropertyMessage: Message = {
+            id: (Date.now() + 1).toString(),
+            role: "assistant",
+            content: "物件URLを送信して投資判断を取得してから、質問や収支シミュレーションをご利用ください。",
+            timestamp: new Date(),
+          };
+          setMessages((prev) => [...prev, noPropertyMessage]);
+        }
       }
     } catch (error: any) {
       console.error("Error sending message:", error);
@@ -340,6 +254,9 @@ export default function Home() {
       }
     }
   };
+
+  const selectedSim = selectedSimulationId ? cashflowSimulations.find((s) => s.id === selectedSimulationId) : null;
+  const displayCashflowResult = selectedSim ? cashflowSimulationToResult(selectedSim) : cashflowSimulation;
 
   return (
     <div className="flex min-h-0 flex-1">
@@ -385,6 +302,7 @@ export default function Home() {
                 </div>
               </div>
             )}
+            <div ref={messagesEndRef} aria-hidden="true" />
           </div>
         </div>
 
@@ -397,9 +315,8 @@ export default function Home() {
       </div>
 
       {/* 右側: 物件データ表示エリア */}
-      <div className="flex min-h-0 w-1/2 flex-1 flex-col bg-gray-50 md:w-2/3">
-        <div className="min-h-0 flex-1 overflow-y-auto p-6">
-          <div className="mx-auto max-w-2xl">
+      <div className="w-1/2 overflow-y-auto bg-gray-50 p-6 md:w-2/3">
+        <div className="mx-auto max-w-4xl">
           {propertyData ? (
             <>
               {/* タブナビゲーション */}
@@ -467,7 +384,14 @@ export default function Home() {
                 {activeTab === "analysis" && (
                   <>
                     {user ? (
-                      <InvestmentAnalysis analysis={propertyData.analysis} />
+                      <InvestmentAnalysis
+                        analysis={propertyData.analysis}
+                        cashflowSimulation={displayCashflowResult}
+                        cashflowSimulations={cashflowSimulations}
+                        selectedSimulationId={selectedSimulationId}
+                        onSelectSimulation={setSelectedSimulationId}
+                        openSimulationTab={openSimulationTab}
+                      />
                     ) : (
                       <div className="rounded-lg border border-gray-200 bg-white p-6">
                         <p className="mb-4 text-center text-gray-600">
@@ -492,13 +416,8 @@ export default function Home() {
               </div>
             </>
           ) : (
-            <div className="rounded-lg border border-gray-200 bg-white p-6">
-              <p className="text-center text-gray-500">
-                物件URLを入力すると、ここに物件情報と投資判断が表示されます
-              </p>
-            </div>
+            <HomeRightColumnPlaceholder />
           )}
-          </div>
         </div>
       </div>
 
