@@ -180,6 +180,18 @@ export default function ChatPage() {
             return;
           }
 
+          // 一覧・建物ライブラリ等の案内メッセージのみ表示
+          if (data.isListOrLibraryMessage && data.content) {
+            const listMessage: Message = {
+              id: (Date.now() + 1).toString(),
+              role: "assistant",
+              content: data.content,
+              timestamp: new Date(),
+            };
+            setMessages((prev) => [...prev, listMessage]);
+            return;
+          }
+
           const analysisMessage: Message = {
             id: (Date.now() + 1).toString(),
             role: "assistant",
