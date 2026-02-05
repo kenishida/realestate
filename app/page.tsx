@@ -120,7 +120,7 @@ export default function Home() {
         });
 
         const text = await response.text();
-        let data: { success?: boolean; isRentalMessage?: boolean; content?: string; conversationCustomPath?: string | null; analysis?: { recommendation?: string; score?: string }; analysisId?: string; conversationId?: string; error?: string; details?: string; help?: string; propertyDataUnavailable?: boolean };
+        let data: { success?: boolean; isRentalMessage?: boolean; isListOrLibraryMessage?: boolean; content?: string; conversationCustomPath?: string | null; analysis?: { recommendation?: string; score?: string }; analysisId?: string; conversationId?: string; error?: string; details?: string; help?: string; propertyDataUnavailable?: boolean };
         try {
           data = text ? JSON.parse(text) : {};
         } catch {
@@ -147,6 +147,18 @@ export default function Home() {
               timestamp: new Date(),
             };
             setMessages((prev) => [...prev, rentalMessage]);
+            return;
+          }
+
+          // 一覧・建物ライブラリ等の案内メッセージのみ表示
+          if (data.isListOrLibraryMessage && data.content) {
+            const listMessage: Message = {
+              id: (Date.now() + 1).toString(),
+              role: "assistant",
+              content: data.content,
+              timestamp: new Date(),
+            };
+            setMessages((prev) => [...prev, listMessage]);
             return;
           }
 

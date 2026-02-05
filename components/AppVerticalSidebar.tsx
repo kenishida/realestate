@@ -2,7 +2,9 @@
 
 import Link from "next/link";
 
-export default function AppVerticalSidebar() {
+type Props = { onHomeClick?: () => void };
+
+export default function AppVerticalSidebar({ onHomeClick }: Props) {
   return (
     <aside
       className="group flex h-full w-16 shrink-0 flex-col border-r border-gray-200 bg-white transition-[width] duration-200 ease-out hover:w-52"
@@ -24,9 +26,10 @@ export default function AppVerticalSidebar() {
         </Link>
       </div>
       <nav className="flex flex-1 flex-col gap-1 px-3 py-4">
-        {/* ホーム */}
+        {/* ホーム（既にホームにいる場合はクリックで新規会話にリセット） */}
         <Link
           href="/"
+          onClick={onHomeClick}
           className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900"
           title="ホーム"
         >

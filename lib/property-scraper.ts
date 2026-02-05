@@ -57,6 +57,66 @@ export async function scrapePropertyData(url: string, html?: string): Promise<Sc
 }
 
 /**
+ * 個別物件詳細ページのURLかどうかを判定する（ホワイトリスト）。
+ * スクレイパーが実際に扱える「物件1件の詳細ページ」のパスのみ許可し、
+ * 一覧・建物ライブラリ・検索結果等は許可しない。
+ */
+export function isPropertyDetailUrl(url: string): boolean {
+  try {
+    const u = new URL(url);
+    const hostname = u.hostname.toLowerCase();
+    const pathname = u.pathname.replace(/\/$/, ""); // 末尾スラッシュ除去
+    const segments = pathname.split("/").filter(Boolean);
+
+    // アットホーム（賃貸は isRentalListingUrl で弾く想定なのでここでは購入・売却系のみ）
+    if (hostname.includes("athome") || hostname.includes("athomes")) {
+      // 一覧ページは除外（末尾が /list や /list/ など）
+      const pathNorm = pathname.replace(/\/$/, "");
+      const lastSegment = pathNorm.split("/").pop()?.toLowerCase();
+      if (lastSegment === "list" || lastSegment === "search") return false;
+
+      // 物件詳細: /buy_other/数字, /mansion/カテゴリ/数字, /kodate/..., /tochi/...
+      if (pathname.includes("/buy_other/") && segments.length >= 2) return true;
+      if (pathname.includes("/mansion/") && segments.length >= 3) return true;
+      if (pathname.includes("/kodate/") && segments.length >= 2) return true;
+      if (pathname.includes("/tochi/") && segments.length >= 2) return true;
+      return false;
+    }
+
+    // SUUMO（賃貸は別で弾く。ここでは購入・売却の物件詳細）
+    if (hostname.includes("suumo")) {
+      // 物件詳細: /jyusyo/xxx/, /jj/xxx/ など（一覧でないパス）
+      if (pathname.includes("/jyusyo/") && segments.length >= 2) return true;
+      if (pathname.includes("/jj/") && segments.length >= 2) return true;
+      return false;
+    }
+
+    // Homes（LIFULL。賃貸は別で弾く。投資は toushi.homes.co.jp）
+    if (hostname.includes("homes")) {
+      if (hostname.includes("toushi.homes")) {
+        // 投資サイトは物件詳細が主。パスに /detail/ や物件IDらしきセグメントがあれば許可
+        if (pathname.includes("/detail/") || pathname.includes("/property/")) return true;
+        if (segments.length >= 2) return true; // /都道府県/物件ID 等
+      }
+      // 一般 homes.co.jp の売却物件詳細（パスに /detail/ や /property/ 等）
+      if (pathname.includes("/detail/") || pathname.includes("/property/")) return true;
+      return false;
+    }
+
+    // 楽待（rakumachi）
+    if (hostname.includes("rakumachi")) {
+      if (pathname.includes("/property/") || pathname.includes("/detail/")) return true;
+      if (segments.length >= 1 && /^\d+$/.test(segments[segments.length - 1]!)) return true;
+      return false;
+    }
+
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * 賃貸募集用のURLかどうかを判定する（投資判断対象外）。
  * アットホーム・SUUMO・Homes・Yahoo!不動産・CHINTAI・エイブル・いい部屋ネットを対象。
  */
