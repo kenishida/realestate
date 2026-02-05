@@ -75,9 +75,9 @@ export function isPropertyDetailUrl(url: string): boolean {
       const lastSegment = pathNorm.split("/").pop()?.toLowerCase();
       if (lastSegment === "list" || lastSegment === "search") return false;
 
-      // 物件詳細: /buy_other/数字, /mansion/カテゴリ/数字, /kodate/..., /tochi/...
+      // 物件詳細: /buy_other/数字, /mansion/数字 または /mansion/カテゴリ/数字, /kodate/..., /tochi/...
       if (pathname.includes("/buy_other/") && segments.length >= 2) return true;
-      if (pathname.includes("/mansion/") && segments.length >= 3) return true;
+      if (pathname.includes("/mansion/") && segments.length >= 2) return true;
       if (pathname.includes("/kodate/") && segments.length >= 2) return true;
       if (pathname.includes("/tochi/") && segments.length >= 2) return true;
       return false;
