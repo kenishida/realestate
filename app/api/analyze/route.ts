@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { getSupabaseForApi, createServiceRoleSupabase } from "@/lib/supabase-server";
 import { generateTextWithGemini } from "@/lib/gemini";
-import { scrapePropertyData, fetchPropertyHTML, isBlockedOrRedirectPage, isRentalListingUrl } from "@/lib/property-scraper";
+import { scrapePropertyData, fetchPropertyHTML, isBlockedOrRedirectPage, isRentalListingUrl, isPropertyDetailUrl } from "@/lib/property-scraper";
 import { runExternalEnvResearch } from "@/lib/external-env-research";
 import type { Property, PropertyAnalysis } from "@/lib/types";
 import { randomBytes } from "crypto";
@@ -96,6 +96,17 @@ export async function POST(request: Request) {
         success: true,
         isRentalMessage: true,
         content: rentalMessage,
+      });
+    }
+
+    // ホワイトリスト: 個別物件詳細URL以外（一覧・建物ライブラリ等）は案内メッセージのみ返す
+    if (!isPropertyDetailUrl(url)) {
+      const listMessage =
+        "このURLは一覧ページや建物ライブラリーのページのようです。投資判断を行うには、**個別の物件詳細ページ**のURLを入力してください。アットホームの場合は物件名をクリックして開いた「物件詳細」ページのURLを、SUUMO・HOME'Sの場合は1件の物件を開いたページのURLをコピーして送信してください。";
+      return NextResponse.json({
+        success: true,
+        isListOrLibraryMessage: true,
+        content: listMessage,
       });
     }
 
