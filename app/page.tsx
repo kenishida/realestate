@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import { useRouter } from "next/navigation";
 import ChatInput from "@/components/ChatInput";
 import ChatMessage from "@/components/ChatMessage";
 import PropertyDetails from "@/components/PropertyDetails";
@@ -23,6 +24,7 @@ interface Message {
 }
 
 export default function Home() {
+  const router = useRouter();
   const { user, session, signOut, isLoading: authLoading } = useAuth();
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [authModalMessage, setAuthModalMessage] = useState<string | undefined>(undefined);
@@ -118,7 +120,7 @@ export default function Home() {
         });
 
         const text = await response.text();
-        let data: { success?: boolean; analysis?: { recommendation?: string; score?: string }; analysisId?: string; conversationId?: string; error?: string; details?: string; help?: string; propertyDataUnavailable?: boolean };
+        let data: { success?: boolean; isRentalMessage?: boolean; content?: string; conversationCustomPath?: string | null; analysis?: { recommendation?: string; score?: string }; analysisId?: string; conversationId?: string; error?: string; details?: string; help?: string; propertyDataUnavailable?: boolean };
         try {
           data = text ? JSON.parse(text) : {};
         } catch {
@@ -136,7 +138,26 @@ export default function Home() {
         }
 
         if (data.success) {
-          // 投資判断結果を表示
+          // 賃貸URLの案内メッセージのみ表示（投資判断は行わない）
+          if (data.isRentalMessage && data.content) {
+            const rentalMessage: Message = {
+              id: (Date.now() + 1).toString(),
+              role: "assistant",
+              content: data.content,
+              timestamp: new Date(),
+            };
+            setMessages((prev) => [...prev, rentalMessage]);
+            return;
+          }
+
+          // slug があれば個別チャットURLに切り替え（ChatGPT風：画面は遷移せずURLだけ変わる）
+          if (data.conversationCustomPath) {
+            setIsLoading(false);
+            router.replace(`/chat/${data.conversationCustomPath}`);
+            return;
+          }
+
+          // custom_path が無い場合の従来挙動（ホーム上で結果表示）
           const analysisMessage: Message = {
             id: (Date.now() + 1).toString(),
             role: "assistant",
@@ -147,17 +168,13 @@ export default function Home() {
           setMessages((prev) => [...prev, analysisMessage]);
           setPropertyData({ ...data, propertyDataUnavailable: data.propertyDataUnavailable ?? false });
           
-          // 分析IDを保存
           if (data.analysisId) {
             setCurrentAnalysisId(data.analysisId);
           }
-          
-          // 会話IDを保存（次回のリクエストで使用）
           if (data.conversationId) {
             localStorage.setItem("currentConversationId", data.conversationId);
           }
 
-          // 投資目的の質問を自動追加
           const purposeQuestion: Message = {
             id: (Date.now() + 2).toString(),
             role: "assistant",

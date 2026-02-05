@@ -57,6 +57,36 @@ export async function scrapePropertyData(url: string, html?: string): Promise<Sc
 }
 
 /**
+ * 賃貸募集用のURLかどうかを判定する（投資判断対象外）。
+ * アットホーム・SUUMO・Homes・Yahoo!不動産・CHINTAI・エイブル・いい部屋ネットを対象。
+ */
+export function isRentalListingUrl(url: string): boolean {
+  try {
+    const u = new URL(url);
+    const hostname = u.hostname.toLowerCase();
+    const pathname = u.pathname.toLowerCase();
+
+    // 賃貸専用ドメイン（パス不問）
+    if (hostname.includes("chintai.net")) return true; // CHINTAI（例: www.chintai.net/detail/bk-...）
+    if (hostname.includes("able.co.jp")) return true;  // エイブル（例: www.able.co.jp/detail/...）
+    if (hostname.includes("eheya.net")) return true;   // いい部屋ネット（例: www.eheya.net/detail/...）
+
+    // Yahoo!不動産: 賃貸は /rent を含む（例: realestate.yahoo.co.jp/rent/detail/...）
+    if ((hostname.includes("yahoo") || hostname.includes("realestate")) && pathname.includes("/rent")) return true;
+
+    // アットホーム・SUUMO・Homes: 賃貸は /chintai を含む
+    if (!pathname.includes("/chintai")) return false;
+    if (hostname.includes("athome") || hostname.includes("athomes")) return true;
+    if (hostname.includes("suumo")) return true;
+    if (hostname.includes("homes")) return true;
+
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * 認証中・リダイレクト・ボット対策ページかどうかを判定する。
  * アットホームの「【アットホーム】認証中」等、物件詳細ではないページを検知する。
  */
