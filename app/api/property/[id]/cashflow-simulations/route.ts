@@ -1,13 +1,14 @@
 import { NextResponse } from "next/server";
 import { getSupabaseForApi } from "@/lib/supabase-server";
-import type { Property, PropertyAnalysis, CashflowSimulation } from "@/lib/types";
-import { computeCashflow } from "@/lib/cashflow-simulation";
+import { runCashflowSimulation } from "@/lib/run-cashflow-simulation";
+import type { CashflowSimulation } from "@/lib/types";
 
 const DEFAULT_DOWN_PAYMENT = 10_000_000;
 
 /**
  * 収支シミュレーションを新規作成（投資判断に紐づけて保存）
  * POST body: { assumed_rent_yen: number, down_payment_yen?: number }
+ * ブラウザからの直接呼び出し用。RAG からは runCashflowSimulation を直接利用すること。
  */
 export async function POST(
   request: Request,
@@ -34,91 +35,29 @@ export async function POST(
       );
     }
 
-    const { data: property, error: propertyError } = await supabase
-      .from("properties")
-      .select("id, price")
-      .eq("id", propertyId)
-      .single();
-
-    if (propertyError || !property) {
-      return NextResponse.json(
-        { success: false, error: "Property not found" },
-        { status: 404 }
-      );
-    }
-
-    const price = (property as Property).price;
-    if (price == null || price <= 0) {
-      return NextResponse.json(
-        { success: false, error: "Property price is not set. Cannot run simulation." },
-        { status: 400 }
-      );
-    }
-
-    const { data: analyses, error: analysesError } = await supabase
-      .from("property_analyses")
-      .select("id")
-      .eq("property_id", propertyId)
-      .order("created_at", { ascending: false })
-      .limit(1);
-
-    if (analysesError || !analyses?.length) {
-      return NextResponse.json(
-        { success: false, error: "No investment analysis found for this property. Run analysis first." },
-        { status: 400 }
-      );
-    }
-
-    const analysis = analyses[0] as PropertyAnalysis;
-    const result = computeCashflow({
-      propertyPriceYen: price,
-      downPaymentYen: Number.isFinite(downPaymentYen) ? downPaymentYen : DEFAULT_DOWN_PAYMENT,
-      monthlyRentYen: Math.round(assumedRentYen),
+    const result = await runCashflowSimulation({
+      supabase,
+      propertyId,
+      assumed_rent_yen: assumedRentYen,
+      down_payment_yen: downPaymentYen,
     });
 
-    const row = {
-      property_analysis_id: analysis.id,
-      property_price_yen: result.assumptions.propertyPriceYen,
-      acquisition_cost_yen: result.assumptions.acquisitionCostYen,
-      down_payment_yen: result.assumptions.downPaymentYen,
-      loan_amount_yen: result.assumptions.loanAmountYen,
-      interest_rate: result.assumptions.interestRate,
-      loan_years: result.assumptions.loanYears,
-      assumed_rent_yen: result.assumptions.monthlyRentYen,
-      vacancy_rate: result.assumptions.vacancyRate,
-      opex_rate: result.assumptions.opexRate,
-      gpi_yen: result.annual.gpi,
-      vacancy_loss_yen: result.annual.vacancyLoss,
-      egi_yen: result.annual.egi,
-      opex_yen: result.annual.opex,
-      noi_yen: result.annual.noi,
-      ads_yen: result.annual.ads,
-      btcf_yen: result.annual.btcf,
-      monthly_repayment_yen: result.monthlyRepayment,
-    };
-
-    const { data: inserted, error: insertError } = await supabase
-      .from("cashflow_simulations")
-      .insert(row)
-      .select("*")
-      .single();
-
-    if (insertError) {
-      console.error("[CashflowSimulations API] Insert error:", insertError);
-      return NextResponse.json(
-        { success: false, error: insertError.message },
-        { status: 500 }
-      );
+    if (!result.success) {
+      const status =
+        result.error === "Property not found" ? 404 :
+        result.error.includes("assumed_rent_yen") || result.error.includes("price") || result.error.includes("analysis") ? 400 : 500;
+      return NextResponse.json({ success: false, error: result.error }, { status });
     }
 
     return NextResponse.json({
       success: true,
-      simulation: inserted as CashflowSimulation,
+      simulation: result.simulation as CashflowSimulation,
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const msg = error instanceof Error ? error.message : String(error);
     console.error("[CashflowSimulations API] Error:", error);
     return NextResponse.json(
-      { success: false, error: error.message ?? "Unknown error" },
+      { success: false, error: msg ?? "Unknown error" },
       { status: 500 }
     );
   }

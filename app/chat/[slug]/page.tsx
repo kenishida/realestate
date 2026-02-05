@@ -168,10 +168,22 @@ export default function ChatPage() {
         }
 
         if (data.success) {
+          // 賃貸URLの案内メッセージのみ表示（投資判断は行わない）
+          if (data.isRentalMessage && data.content) {
+            const rentalMessage: Message = {
+              id: (Date.now() + 1).toString(),
+              role: "assistant",
+              content: data.content,
+              timestamp: new Date(),
+            };
+            setMessages((prev) => [...prev, rentalMessage]);
+            return;
+          }
+
           const analysisMessage: Message = {
             id: (Date.now() + 1).toString(),
             role: "assistant",
-            content: `投資判断が完了しました。【推奨度】${data.analysis.recommendation || "評価中"} 【投資スコア】${data.analysis.score || "評価中"} 右側の「投資判断」で詳細をご確認ください。`,
+            content: `投資判断が完了しました。【推奨度】${data.analysis?.recommendation || "評価中"} 【投資スコア】${data.analysis?.score || "評価中"} 右側の「投資判断」で詳細をご確認ください。`,
             timestamp: new Date(),
           };
 

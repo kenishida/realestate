@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { getSupabaseForApi, createServiceRoleSupabase } from "@/lib/supabase-server";
 import { generateTextWithGemini } from "@/lib/gemini";
-import { scrapePropertyData, fetchPropertyHTML, isBlockedOrRedirectPage } from "@/lib/property-scraper";
+import { scrapePropertyData, fetchPropertyHTML, isBlockedOrRedirectPage, isRentalListingUrl } from "@/lib/property-scraper";
+import { runExternalEnvResearch } from "@/lib/external-env-research";
 import type { Property, PropertyAnalysis } from "@/lib/types";
 import { randomBytes } from "crypto";
 
@@ -85,6 +86,17 @@ export async function POST(request: Request) {
         { error: "Invalid URL format" },
         { status: 400 }
       );
+    }
+
+    // 賃貸募集URLは投資判断対象外 → 案内メッセージのみ返す（スクレイプ・分析は行わない）
+    if (isRentalListingUrl(url)) {
+      const rentalMessage =
+        "賃貸のお探しでしょうか？ここでは不動産投資のために物件価値を判断しているので、賃貸ではなく購入用・売却用の物件URLを送ってください。アットホームやSUUMOの「売却」「戸建」「マンション」などの物件詳細ページからURLをコピーして送信すると分析できます。";
+      return NextResponse.json({
+        success: true,
+        isRentalMessage: true,
+        content: rentalMessage,
+      });
     }
 
     const normalizedUrl = normalizePropertyUrl(url);
@@ -678,24 +690,13 @@ export async function POST(request: Request) {
     }
     }
 
-    // 住所が取得できていれば外部環境リサーチを非同期で開始（レスポンスは待たない）
+    // 住所が取得できていれば外部環境リサーチを実行（await して本番でも確実に完了させる）
     if (property?.address?.trim() && propertyId) {
-      let base: string | null = null;
       try {
-        if (typeof process.env.VERCEL_URL !== "undefined") {
-          base = `https://${process.env.VERCEL_URL}`;
-        } else if (process.env.NEXT_PUBLIC_APP_URL) {
-          base = process.env.NEXT_PUBLIC_APP_URL;
-        } else {
-          base = new URL(request.url).origin;
-        }
-      } catch (_) {}
-      if (base) {
-        const refreshUrl = `${base}/api/property/${propertyId}/external-env/refresh`;
-        fetch(refreshUrl, { method: "POST" }).catch((e) =>
-          console.warn("[Analyze] External env refresh trigger failed:", e?.message)
-        );
-        console.log("[Analyze] Triggered external env research:", refreshUrl);
+        await runExternalEnvResearch(propertyId, property.address ?? null);
+        console.log("[Analyze] External env research completed for:", propertyId);
+      } catch (e: any) {
+        console.warn("[Analyze] External env research failed:", e?.message);
       }
     }
 

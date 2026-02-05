@@ -1,9 +1,11 @@
 "use client";
 
+import { usePathname } from "next/navigation";
 import AppVerticalSidebar from "@/components/AppVerticalSidebar";
 import { useAuth } from "@/lib/auth-context";
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname();
   const { user, signOut, isLoading: authLoading } = useAuth();
 
   return (
@@ -29,7 +31,9 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             </div>
           )}
         </header>
-        <main className="flex min-h-0 flex-1 flex-col overflow-y-auto">{children}</main>
+        <main key={pathname ?? "/"} className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+          {children}
+        </main>
       </div>
     </div>
   );

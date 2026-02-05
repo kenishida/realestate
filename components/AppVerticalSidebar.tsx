@@ -49,31 +49,6 @@ export default function AppVerticalSidebar() {
           </span>
         </Link>
 
-        {/* チャットを新規作成 */}
-        <Link
-          href="/"
-          className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900"
-          title="チャットを新規作成"
-        >
-          <svg
-            className="h-6 w-6 shrink-0"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-            aria-hidden
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M12 4.5v15m7.5-7.5h-15"
-            />
-          </svg>
-          <span className="whitespace-nowrap text-sm font-medium opacity-0 transition-opacity duration-200 group-hover:opacity-100">
-            チャットを新規作成
-          </span>
-        </Link>
-
         {/* チャット履歴 */}
         <Link
           href="/chats"
